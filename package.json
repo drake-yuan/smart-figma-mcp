@@ -1,0 +1,20 @@
+{
+  "name": "smart-figma-mcp",
+  "version": "0.2.0",
+  "description": "Smart Figma-to-Code MCP Server — BYOK + offline Ed25519 license + server-side quota. Zero-dependency runnable skeleton.",
+  "type": "module",
+  "bin": {
+    "smart-figma-mcp": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "keygen": "node tools/keygen.js",
+    "issue": "node tools/issue-license.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
