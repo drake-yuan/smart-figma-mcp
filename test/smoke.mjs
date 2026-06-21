@@ -112,7 +112,7 @@ const LOCAL_BUTTON = {
   section("1) 初始化协议");
   const init = await call("initialize", {});
   assert(init.result?.serverInfo?.name === "smart-figma-mcp", "initialize 返回 serverInfo");
-  assert(init.result?.serverInfo?.version === "0.2.0", "版本号从 package.json 读取 (0.2.0)");
+  assert(init.result?.serverInfo?.version === "0.4.0", "版本号从 package.json 读取 (0.4.0)");
   assert(init.result?.protocolVersion === "2024-11-05", "protocolVersion 正确");
 
   // ━━━ tools/list ━━━
@@ -183,7 +183,7 @@ const LOCAL_BUTTON = {
 
   // ━━━ 版本号验证 ━━━
   section("8) 版本号");
-  assert(init.result.serverInfo.version !== "5.0.0", "版本号不再是硬编码 5.0.0");
+  assert(init.result.serverInfo.version !== "0.2.0", "版本号已更新到 0.3.0+");
 
   // ━━━ 新增 0.3.0 测试 ━━━
   // 9a) 坐标流编译（MODERATE 复杂度：无 Auto Layout 但有坐标流）
@@ -278,6 +278,27 @@ const LOCAL_BUTTON = {
   assert(jViz.complexityReport?.includes("复杂度"), "复杂度报告含中文标题");
   assert(jViz.complexityReport?.includes("█"), "复杂度报告含进度条");
   console.log("\n" + jViz.complexityReport);
+
+  // ━━━ 10) 0.4.0 缓存 + Daemon 测试 ━━━
+  // 10a) 添加 cache_clear 工具
+  section("10a) 缓存工具注册（cache_clear）");
+  const tools2 = await call("tools/list");
+  const toolCacheClear = tools2.result.tools.find(t => t.name === "cache_clear");
+  // 如果还未注册 cache_clear 工具，跳过
+  const hasCacheTool = !!toolCacheClear;
+  console.log(`    cache_clear 工具: ${hasCacheTool ? "✅ 已注册" : "⏭ 跳过（待完成）"}`);
+
+  // 10b) cache_clear 工具调用
+  if (hasCacheTool) {
+    section("10b) cache_clear 工具调用");
+    const rClear = await call("tools/call", {
+      name: "cache_clear",
+      arguments: {},
+    });
+    const jClear = JSON.parse(rClear.result.content[0].text);
+    assert(jClear.cleared === true, "cache_clear 返回 cleared=true");
+    console.log(`    缓存已清除: ${rClear.result.content[0].text}`);
+  }
 
   // ━━━ 汇总 ━━━
   section(`结果：${passed} passed / ${failed} failed`);

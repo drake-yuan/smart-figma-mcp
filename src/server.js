@@ -31,6 +31,9 @@ import { mapToVariant, rememberMapping, lookupMapping } from "./mapping.js";
 import { getNode as figmaGetNode, getFile as figmaGetFile } from "./figma-client.js";
 import { normalizeNode, normalizeFileMeta } from "./figma-normalizer.js";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import { getDaemonClient } from "./daemon-client.js";
+import { CacheManager } from "./cache.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +75,39 @@ const ERROR_CODES = {
 // ─── 初始化状态机 ───
 let _initialized = false;
 
+// ─── Daemon 连接 ───
+let daemon = null;
+let daemonProcess = null;
+
+async function initDaemon() {
+  daemon = getDaemonClient();
+  const connected = await daemon.connect();
+  if (connected) {
+    xlog("info", `daemon connected (${daemon.mode} mode)`);
+  } else {
+    // 尝试 spawn daemon 子进程
+    xlog("info", "daemon not running, spawning...");
+    try {
+      const daemonPath = path.join(__dirname, "daemon.js");
+      daemonProcess = spawn("node", [daemonPath], {
+        stdio: ["ignore", "ignore", "inherit"],
+        detached: false,
+      });
+      daemonProcess.on("error", () => { daemonProcess = null; });
+      // 等 300ms 后重试连接
+      await new Promise(r => setTimeout(r, 300));
+      await daemon.connect();
+      if (daemon.connected()) {
+        xlog("info", `daemon spawned + connected (${daemon.mode} mode)`);
+      } else {
+        xlog("warn", "daemon still unavailable, running in DIRECT mode");
+      }
+    } catch (e) {
+      xlog("warn", `daemon spawn failed: ${e.message}, running in DIRECT mode`);
+    }
+  }
+}
+
 // ─── 门禁：license + BYOK ───
 function gate() {
   const token = process.env.SMART_FIGMA_LICENSE || "";
@@ -82,7 +118,7 @@ function gate() {
 }
 
 // ─── 工具实现 ───
-function toolCompile(args) {
+async function toolCompile(args) {
   const { lic, llm } = gate();
   if (!lic.ok) {
     return errContent(`License 校验失败：${lic.reason}。请检查 SMART_FIGMA_LICENSE。`);
@@ -96,7 +132,7 @@ function toolCompile(args) {
     if (!token) return errContent("figmaUrl 模式需要 FIGMA_ACCESS_TOKEN 或传入 figmaToken。");
     try {
       const { fileKey, nodeId } = parseFigmaUrl(args.figmaUrl);
-      const fetched = figmaGetNode(fileKey, nodeId, token);
+      const fetched = await figmaGetNode(fileKey, nodeId, token);
       if (!fetched) return errContent("Figma API 返回空数据。");
       node = normalizeNode(fetched);
     } catch (e) {
@@ -132,6 +168,16 @@ function toolCompile(args) {
   // 编译：根据策略选不同路径
   let tailwind, coordinateFlow, recursiveTree;
   const mode = args.mode || "flat";
+
+  // ── 缓存检查（跳过配额扣减的开销）──
+  const nodeId = node.id || node.name || "anon";
+  const contentHash = daemon?.fallbackCache
+    ? daemon.fallbackCache.contentHash(node)
+    : new CacheManager().contentHash(node);
+  const cached = (daemon && !args.siblings) ? await daemon.getCached(nodeId, contentHash, mode, styleFormat) : null;
+  if (cached) {
+    return okContent(JSON.stringify(cached.result, null, 2));
+  }
 
   if (mode === "recursive") {
     // 递归编译整棵子树
@@ -176,7 +222,7 @@ function toolCompile(args) {
     };
   }
 
-  return okContent(JSON.stringify({
+  const result = {
     billing: llm.byok
       ? { mode: "BYOK", provider: llm.provider, note: "token 走用户账单，我方零变动成本" }
       : { mode: "CREDITS", charged: charge.cost, remaining: charge.remaining },
@@ -191,10 +237,17 @@ function toolCompile(args) {
     ...(recursiveTree && { recursiveTree }),
     ...(responsive && { responsive }),
     ...(renewNotice && { renewNotice }),
-  }, null, 2));
+  };
+
+  // ── 缓存写入 ──
+  if (daemon) {
+    daemon.setCache(nodeId, contentHash, mode, styleFormat, { result }).catch(() => {});
+  }
+
+  return okContent(JSON.stringify(result, null, 2));
 }
 
-function toolFetchFigma(args) {
+async function toolFetchFigma(args) {
   const { lic, llm } = gate();
   if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
 
@@ -208,13 +261,13 @@ function toolFetchFigma(args) {
     const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
 
     if (action === "file_meta") {
-      const meta = figmaGetFile(fileKey, token);
+      const meta = await figmaGetFile(fileKey, token);
       const normalized = normalizeFileMeta(meta);
       return okContent(JSON.stringify(normalized, null, 2));
     }
 
     // action === "node" (default)
-    const fetched = figmaGetNode(fileKey, nodeId, token);
+    const fetched = await figmaGetNode(fileKey, nodeId, token);
     if (!fetched) return errContent(`节点 ${nodeId} 未找到。`);
     const normalized = normalizeNode(fetched);
     return okContent(JSON.stringify(normalized, null, 2));
@@ -283,6 +336,21 @@ function toolRemember(args) {
   }
   const count = rememberMapping(projectRoot, { figmaComponentKey, figmaName, target });
   return okContent(`已沉淀映射资产（共 ${count} 条）。该资产绑定本工具，构成切换成本护城河。`);
+}
+
+function toolCacheClear() {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  try {
+    if (daemon) {
+      return daemon.cacheClear().then((result) =>
+        okContent(JSON.stringify(result || { cleared: true }, null, 2))
+      );
+    }
+    return okContent(JSON.stringify({ cleared: true, note: "无 daemon，无可清除缓存" }, null, 2));
+  } catch (e) {
+    return errContent(`缓存清除失败：${e.message}`);
+  }
 }
 
 function sanitizeCode(raw) {
@@ -360,18 +428,28 @@ const TOOLS = [
       required: ["projectRoot", "figmaComponentKey", "target"],
     },
   },
+  {
+    name: "cache_clear",
+    description: "清除所有编译缓存（L1 内存 + L2 磁盘），用于数据源变更后强制刷新。",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
 
-function dispatchTool(name, args) {
+async function dispatchTool(name, args) {
   switch (name) {
     case "compile_figma_component":
-      return toolCompile(args || {});
+      return await toolCompile(args || {});
     case "fetch_figma_node":
-      return toolFetchFigma(args || {});
+      return await toolFetchFigma(args || {});
     case "save_component":
       return toolSave(args || {});
     case "remember_mapping":
       return toolRemember(args || {});
+    case "cache_clear":
+      return toolCacheClear();
     default:
       throw Object.assign(new Error(`Tool not found: ${name}`), { code: ERROR_CODES.METHOD_NOT_FOUND });
   }
@@ -393,7 +471,7 @@ function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
-function handle(req) {
+async function handle(req) {
   const { id, method, params } = req;
 
   // 通知(无 id)处理
@@ -408,6 +486,8 @@ function handle(req) {
     // ── initialize（不需要 pre-init 检查） ──
     if (method === "initialize") {
       _initialized = true;
+      // 后台异步初始化 daemon（不阻塞 initialize 响应）
+      initDaemon().catch(e => xlog("warn", `daemon init error: ${e.message}`));
       return send({ jsonrpc: "2.0", id, result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
@@ -423,11 +503,17 @@ function handle(req) {
     // ── health（无需初始化，用于诊断） ──
     if (method === "health") {
       const g = gate();
+      let cacheStats = null;
+      if (daemon) {
+        try { cacheStats = await daemon.cacheStats(); } catch {}
+      }
       return send({ jsonrpc: "2.0", id, result: {
         status: "ok",
         uptime: process.uptime(),
         license_valid: g.lic.ok,
         byok_enabled: g.llm.byok,
+        daemon_mode: daemon?.mode || "DIRECT",
+        cache: cacheStats?.hits || null,
         node_version: process.version,
         version: SERVER_VERSION,
       }});
@@ -446,7 +532,7 @@ function handle(req) {
       if (!params?.name) {
         return send(rpcError(id, ERROR_CODES.INVALID_PARAMS, "Missing tool name in params.name"));
       }
-      const result = dispatchTool(params.name, params.arguments);
+      const result = await dispatchTool(params.name, params.arguments);
       return send({ jsonrpc: "2.0", id, result });
     }
 
@@ -490,6 +576,10 @@ function gracefulShutdown(signal) {
       }
     }
   } catch {}
+  // 通知 daemon 退出
+  if (daemon && daemon.connected()) {
+    daemon.shutdown().catch(() => {});
+  }
   xlog("info", "server 已关闭。");
   process.exit(0);
 }

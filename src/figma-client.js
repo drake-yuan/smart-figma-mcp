@@ -130,14 +130,14 @@ function __non_webpack_require__(mod) {
 /**
  * GET /v2/files/:key → 获取文件元数据
  */
-export function getFile(fileKey, token) {
+export async function getFile(fileKey, token) {
   return figmaFetch(`/v2/files/${fileKey}`, token);
 }
 
 /**
  * GET /v2/files/:key/nodes?ids=:nodeId → 获取节点详情（核心）
  */
-export function getNode(fileKey, nodeId, token) {
+export async function getNode(fileKey, nodeId, token) {
   const encodedId = encodeURIComponent(nodeId);
   return figmaFetch(`/v2/files/${fileKey}/nodes?ids=${encodedId}`, token);
 }
