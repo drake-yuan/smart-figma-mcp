@@ -1,0 +1,14 @@
+name: Test
+on: [push, pull_request]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm run keygen
+      - run: |
+          TOKEN=$(node tools/issue-license.js --sub ci --plan maker --days 1 --quota-monthly 10 2>/dev/null | head -2 | tail -1)
+          SMART_FIGMA_LICENSE="$TOKEN" node test/smoke.mjs

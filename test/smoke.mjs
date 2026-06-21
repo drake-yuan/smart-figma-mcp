@@ -113,7 +113,7 @@ const LOCAL_BUTTON = {
   section("1) 初始化协议");
   const init = await call("initialize", {});
   assert(init.result?.serverInfo?.name === "smart-figma-mcp", "initialize 返回 serverInfo");
-  assert(init.result?.serverInfo?.version === "0.5.0", "版本号从 package.json 读取 (0.5.0)");
+  assert(init.result?.serverInfo?.version === "1.0.0", "版本号从 package.json 读取 (1.0.0)");
   assert(init.result?.protocolVersion === "2024-11-05", "protocolVersion 正确");
 
   // ━━━ tools/list ━━━

@@ -1,20 +1,49 @@
 {
   "name": "smart-figma-mcp",
-  "version": "0.5.0",
-  "description": "Smart Figma-to-Code MCP Server — BYOK + offline Ed25519 license + server-side quota. Zero-dependency runnable skeleton.",
+  "version": "1.0.0",
+  "description": "Smart Figma-to-Code MCP Server — map Figma designs to your local shadcn/ui components, generate code, and write files. BYOK + Variant-level mapping + deterministic write.",
   "type": "module",
   "bin": {
-    "smart-figma-mcp": "src/server.js"
+    "smart-figma-mcp": "./bin/cli.js"
   },
   "scripts": {
     "start": "node src/server.js",
     "keygen": "node tools/keygen.js",
     "issue": "node tools/issue-license.js",
-    "test": "node --test test/"
+    "test": "node test/smoke.mjs",
+    "prepublishOnly": "node test/smoke.mjs 2>&1 | grep -q '烟囱测试全部通过'"
   },
+  "files": [
+    "src/",
+    "bin/",
+    "keys/public.pem",
+    "tools/keygen.js",
+    "tools/quota-server.js"
+  ],
+  "keywords": [
+    "mcp",
+    "figma",
+    "codegen",
+    "tailwind",
+    "shadcn-ui",
+    "cursor",
+    "claude-code",
+    "design-to-code",
+    "figma-mcp",
+    "frontend"
+  ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18.0.0"
   },
-  "license": "UNLICENSED",
-  "private": true
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/smart-figma/mcp.git"
+  },
+  "homepage": "https://smart-figma.dev",
+  "bugs": {
+    "url": "https://github.com/smart-figma/mcp/issues"
+  },
+  "author": "Smart Figma Team",
+  "license": "MIT",
+  "private": false
 }

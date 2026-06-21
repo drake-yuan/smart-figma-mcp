@@ -3,6 +3,7 @@
 // 产出： 一个离线 license token，发给付费用户填进 MCP 配置的 SMART_FIGMA_LICENSE。
 //
 // v2 新增：--devices 多设备绑定、--quota-monthly 自定义配额、签发日志(keys/issue-log.jsonl)
+// v3 新增：导出 issueLicense() 函数供 batch-issue.js 复用
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -24,53 +25,65 @@ const PLAN_QUOTA = {
   enterprise: { monthly: 1000000, perDay: 1000000, visualFallback: true },
 };
 
-const sub = arg("sub", "demo@local");
-const plan = arg("plan", "maker");
-const days = parseInt(arg("days", "30"), 10);
-const devicesRaw = arg("devices", "");  // 逗号分隔的设备指纹
-const quotaMonthly = parseInt(arg("quota-monthly", ""), 10) || null;
+export function issueLicense({ sub, plan, days, devicesRaw, quotaMonthly }) {
+  const privPath = path.join(__dirname, "..", "keys", "private.pem");
+  if (!fs.existsSync(privPath)) {
+    throw new Error("❌ 找不到 keys/private.pem，请先运行 `npm run keygen`");
+  }
+  const privateKey = crypto.createPrivateKey(fs.readFileSync(privPath, "utf8"));
 
-const privPath = path.join(__dirname, "..", "keys", "private.pem");
-if (!fs.existsSync(privPath)) {
-  console.error("❌ 找不到 keys/private.pem，请先运行 `npm run keygen`");
-  process.exit(1);
+  const baseQuota = PLAN_QUOTA[plan] || PLAN_QUOTA.maker;
+  const quota = { ...baseQuota };
+  if (quotaMonthly) quota.monthly = quotaMonthly;
+
+  const devices = devicesRaw
+    ? devicesRaw.split(",").map((d) => d.trim()).filter(Boolean)
+    : [];
+
+  const jti = crypto.randomUUID();
+  const payload = {
+    ver: 2,
+    sub,
+    plan: plan || "maker",
+    jti,
+    quota,
+    devices,
+    iat: Date.now(),
+    exp: Date.now() + (days || 30) * 24 * 60 * 60 * 1000,
+  };
+
+  const payloadBuf = Buffer.from(JSON.stringify(payload), "utf8");
+  const signature = crypto.sign(null, payloadBuf, privateKey);
+  const token = `${b64urlEncode(payloadBuf)}.${b64urlEncode(signature)}`;
+
+  // 签发日志
+  const logPath = path.join(__dirname, "..", "keys", "issue-log.jsonl");
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), action: "issue", jti, sub, plan, days, devices, quota: quota.monthly }) + "\n");
+  } catch (e) {
+    console.error(`⚠️  签发日志写入失败: ${e.message}`);
+  }
+
+  return { token, payload, jti };
 }
-const privateKey = crypto.createPrivateKey(fs.readFileSync(privPath, "utf8"));
 
-const baseQuota = PLAN_QUOTA[plan] || PLAN_QUOTA.maker;
-const quota = { ...baseQuota };
-if (quotaMonthly) quota.monthly = quotaMonthly;
+// CLI 入口
+if (process.argv[1] && (process.argv[1].endsWith("issue-license.js") || process.argv[1].endsWith("issue"))) {
+  const sub = arg("sub", "demo@local");
+  const plan = arg("plan", "maker");
+  const days = parseInt(arg("days", "30"), 10);
+  const devicesRaw = arg("devices", "");
+  const quotaMonthly = parseInt(arg("quota-monthly", ""), 10) || null;
 
-const devices = devicesRaw
-  ? devicesRaw.split(",").map((d) => d.trim()).filter(Boolean)
-  : [];
-
-const jti = crypto.randomUUID();
-const payload = {
-  ver: 2,
-  sub,
-  plan,
-  jti,
-  quota,
-  devices,
-  iat: Date.now(),
-  exp: Date.now() + days * 24 * 60 * 60 * 1000,
-};
-
-const payloadBuf = Buffer.from(JSON.stringify(payload), "utf8");
-const signature = crypto.sign(null, payloadBuf, privateKey);
-const token = `${b64urlEncode(payloadBuf)}.${b64urlEncode(signature)}`;
-
-console.log("✅ License 已签发：\n");
-console.log(token);
-console.log("\nPayload：", JSON.stringify(payload, null, 2));
-
-// ━━━ 签发日志 ━━━
-const logPath = path.join(__dirname, "..", "keys", "issue-log.jsonl");
-try {
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), action: "issue", jti, sub, plan, days, devices, quota: quota.monthly }) + "\n");
-  console.log(`\n📝 签发日志已记录到 keys/issue-log.jsonl (jti: ${jti})`);
-} catch (e) {
-  console.error(`⚠️  签发日志写入失败: ${e.message}`);
+  try {
+    const result = issueLicense({ sub, plan, days, devicesRaw, quotaMonthly });
+    console.log("✅ License 已签发：\n");
+    console.log(result.token);
+    console.log("\nPayload：", JSON.stringify(result.payload, null, 2));
+    console.log(`\n📝 签发日志已记录到 keys/issue-log.jsonl (jti: ${result.jti})`);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
 }
