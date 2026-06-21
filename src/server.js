@@ -15,7 +15,7 @@ import readline from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
 import { verifyLicenseOffline, deviceFingerprint, DEMO_PUBLIC_KEY_PEM } from "./license.js";
-import { resolveLLMConfig } from "./byok.js";
+import { resolveLLMConfig, probeKey, securityWarning } from "./byok.js";
 import {
   compileFigmaLayout,
   compileCoordinateFlow,
@@ -26,8 +26,8 @@ import {
   visualizeComplexity,
   detectResponsiveBreakpoints,
 } from "./compiler.js";
-import { debit, CREDIT_COST } from "./quota.js";
-import { mapToVariant, rememberMapping, lookupMapping } from "./mapping.js";
+import { debit, CREDIT_COST, quotaStatus } from "./quota.js";
+import { mapToVariant, rememberMapping, lookupMapping, scanLocalComponents, checkMappingHealth, exportMappings, importMappings, loadAliases, resolveMapping } from "./mapping.js";
 import { getNode as figmaGetNode, getFile as figmaGetFile } from "./figma-client.js";
 import { normalizeNode, normalizeFileMeta } from "./figma-normalizer.js";
 import { fileURLToPath } from "node:url";
@@ -114,7 +114,16 @@ function gate() {
   const fp = deviceFingerprint();
   const lic = verifyLicenseOffline(token, PUBLIC_KEY, fp);
   const llm = resolveLLMConfig();
-  return { lic, llm, fp };
+  // 续期提醒：过期前 7 天内每次调用提示
+  let renewal = null;
+  if (lic.ok && lic.renewal) {
+    renewal = lic.renewal;
+    xlog("warn", `License 还有 ${renewal.daysLeft} 天过期，请续费。`);
+  }
+  // 安全提醒：BYOK key 明文传递
+  const secWarn = securityWarning(llm);
+  if (secWarn) xlog("warn", secWarn);
+  return { lic, llm, fp, renewal };
 }
 
 // ─── 工具实现 ───
@@ -155,7 +164,7 @@ async function toolCompile(args) {
     }, null, 2));
   }
 
-  const charge = debit({
+  const charge = await debit({
     sub: lic.payload.sub,
     quota: lic.payload.quota,
     strategy: complexity.strategy,
@@ -353,6 +362,82 @@ function toolCacheClear() {
   }
 }
 
+function toolScanComponents(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  const { projectRoot } = args;
+  if (!projectRoot) return errContent("缺少 projectRoot 参数。");
+  try {
+    loadAliases(projectRoot);
+    const components = scanLocalComponents(projectRoot);
+    return okContent(JSON.stringify({ components, count: components.length }, null, 2));
+  } catch (e) {
+    return errContent(`组件扫描失败：${e.message}`);
+  }
+}
+
+function toolMappingHealth(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  const { projectRoot } = args;
+  if (!projectRoot) return errContent("缺少 projectRoot 参数。");
+  try {
+    const health = checkMappingHealth(projectRoot);
+    return okContent(JSON.stringify(health, null, 2));
+  } catch (e) {
+    return errContent(`映射健康检查失败：${e.message}`);
+  }
+}
+
+function toolExportMappings(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  const { projectRoot } = args;
+  if (!projectRoot) return errContent("缺少 projectRoot 参数。");
+  try {
+    const data = exportMappings(projectRoot);
+    return okContent(JSON.stringify(data, null, 2));
+  } catch (e) {
+    return errContent(`映射导出失败：${e.message}`);
+  }
+}
+
+function toolImportMappings(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  const { projectRoot, data } = args;
+  if (!projectRoot || !data) return errContent("缺少 projectRoot / data 参数。");
+  try {
+    const result = importMappings(projectRoot, data);
+    return okContent(JSON.stringify(result, null, 2));
+  } catch (e) {
+    return errContent(`映射导入失败：${e.message}`);
+  }
+}
+
+function toolRefreshCRL(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  const crlUrl = args.url || process.env.CRL_URL;
+  if (!crlUrl) return errContent("未配置 CRL URL。请通过 --url 或环境变量 CRL_URL 指定。");
+  return refreshCRL(crlUrl).then((result) =>
+    okContent(JSON.stringify(result, null, 2))
+  ).catch((e) =>
+    errContent(`CRL 刷新失败：${e.message}`)
+  );
+}
+
+async function refreshCRL(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  // 格式：{ version: N, revoked: ["hash1", "hash2", ...] }
+  const crlPath = path.join(os.homedir(), ".smart-figma", "crl.json");
+  fs.mkdirSync(path.dirname(crlPath), { recursive: true });
+  fs.writeFileSync(crlPath, JSON.stringify(data, null, 2));
+  return { refreshed: true, count: (data.revoked || []).length, ts: Date.now() };
+}
+
 function sanitizeCode(raw) {
   return raw
     .replace(/\sdata-node-id="[^"]*"/g, "")
@@ -436,6 +521,55 @@ const TOOLS = [
       properties: {},
     },
   },
+  {
+    name: "scan_components",
+    description: "自动扫描项目本地组件库（shadcn/ui / radix / antd / mui），提取组件名、CVA variants 定义和导入路径。",
+    inputSchema: {
+      type: "object",
+      properties: { projectRoot: { type: "string", description: "项目根目录绝对路径" } },
+      required: ["projectRoot"],
+    },
+  },
+  {
+    name: "check_mapping_health",
+    description: "检查映射资产库中引用的组件文件是否仍存在，标记失效条目。",
+    inputSchema: {
+      type: "object",
+      properties: { projectRoot: { type: "string", description: "项目根目录绝对路径" } },
+      required: ["projectRoot"],
+    },
+  },
+  {
+    name: "export_mappings",
+    description: "导出 .smart-figma/mappings.json 映射资产（可用于团队共享或迁移）。",
+    inputSchema: {
+      type: "object",
+      properties: { projectRoot: { type: "string", description: "项目根目录绝对路径" } },
+      required: ["projectRoot"],
+    },
+  },
+  {
+    name: "import_mappings",
+    description: "从外部 JSON 导入映射资产，合并到本地 .smart-figma/mappings.json。不覆盖同名条目。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectRoot: { type: "string", description: "项目根目录绝对路径" },
+        data: { type: "object", description: "导出的 JSON 数据（含 mappings 数组）" },
+      },
+      required: ["projectRoot", "data"],
+    },
+  },
+  {
+    name: "refresh_crl",
+    description: "从远程刷新 License 吊销列表（CRL），缓存到本地 .smart-figma/crl.json。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "CRL 远程 URL（可选，默认使用环境变量 CRL_URL）" },
+      },
+    },
+  },
 ];
 
 async function dispatchTool(name, args) {
@@ -450,6 +584,16 @@ async function dispatchTool(name, args) {
       return toolRemember(args || {});
     case "cache_clear":
       return toolCacheClear();
+    case "scan_components":
+      return toolScanComponents(args || {});
+    case "check_mapping_health":
+      return toolMappingHealth(args || {});
+    case "export_mappings":
+      return toolExportMappings(args || {});
+    case "import_mappings":
+      return toolImportMappings(args || {});
+    case "refresh_crl":
+      return toolRefreshCRL(args || {});
     default:
       throw Object.assign(new Error(`Tool not found: ${name}`), { code: ERROR_CODES.METHOD_NOT_FOUND });
   }
@@ -488,6 +632,14 @@ async function handle(req) {
       _initialized = true;
       // 后台异步初始化 daemon（不阻塞 initialize 响应）
       initDaemon().catch(e => xlog("warn", `daemon init error: ${e.message}`));
+      // 后台探测 BYOK key 有效性（不阻塞）
+      const llmConfig = resolveLLMConfig();
+      if (llmConfig.byok) {
+        probeKey(llmConfig).then(result => {
+          if (!result.valid) xlog("warn", `BYOK key 无效 (${result.reason})，将回退 Credits 制。`);
+          else xlog("info", `BYOK key 验证通过 (${llmConfig.provider})`);
+        }).catch(() => {});
+      }
       return send({ jsonrpc: "2.0", id, result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
@@ -511,6 +663,8 @@ async function handle(req) {
         status: "ok",
         uptime: process.uptime(),
         license_valid: g.lic.ok,
+        license_payload: g.lic.ok ? g.lic.payload : null,
+        renewal: g.renewal || null,
         byok_enabled: g.llm.byok,
         daemon_mode: daemon?.mode || "DIRECT",
         cache: cacheStats?.hits || null,

@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TMP = path.join(__dirname, "..", "test", "__temp__");
 const serverPath = path.join(__dirname, "..", "src", "server.js");
 
 const child = spawn("node", [serverPath], {
@@ -112,7 +113,7 @@ const LOCAL_BUTTON = {
   section("1) 初始化协议");
   const init = await call("initialize", {});
   assert(init.result?.serverInfo?.name === "smart-figma-mcp", "initialize 返回 serverInfo");
-  assert(init.result?.serverInfo?.version === "0.4.0", "版本号从 package.json 读取 (0.4.0)");
+  assert(init.result?.serverInfo?.version === "0.5.0", "版本号从 package.json 读取 (0.5.0)");
   assert(init.result?.protocolVersion === "2024-11-05", "protocolVersion 正确");
 
   // ━━━ tools/list ━━━
@@ -299,6 +300,38 @@ const LOCAL_BUTTON = {
     assert(jClear.cleared === true, "cache_clear 返回 cleared=true");
     console.log(`    缓存已清除: ${rClear.result.content[0].text}`);
   }
+
+  // ━━━ 11) 0.5.0 Module 02 + 04 测试 ━━━
+  section("11a) scan_components 工具注册");
+  const tools3 = await call("tools/list");
+  assert(tools3.result.tools.some(t => t.name === "scan_components"), "scan_components 已注册");
+  assert(tools3.result.tools.some(t => t.name === "check_mapping_health"), "check_mapping_health 已注册");
+  assert(tools3.result.tools.some(t => t.name === "export_mappings"), "export_mappings 已注册");
+  assert(tools3.result.tools.some(t => t.name === "import_mappings"), "import_mappings 已注册");
+  assert(tools3.result.tools.some(t => t.name === "refresh_crl"), "refresh_crl 已注册");
+
+  section("11b) export_mappings 导出");
+  const rExp = await call("tools/call", {
+    name: "export_mappings",
+    arguments: { projectRoot: TMP },
+  });
+  const jExp = JSON.parse(rExp.result.content[0].text);
+  assert(jExp.version === 2, "mappings 版本号 v2");
+  assert(Array.isArray(jExp.mappings), "mappings 是数组");
+
+  section("11c) check_mapping_health 健康检查");
+  const rHealth = await call("tools/call", {
+    name: "check_mapping_health",
+    arguments: { projectRoot: TMP },
+  });
+  const jHealth = JSON.parse(rHealth.result.content[0].text);
+  assert(typeof jHealth.total === "number", "mapping health 含 total");
+  assert(typeof jHealth.stale === "number", "mapping health 含 stale");
+
+  section("11d) refresh_crl 工具可用");
+  const toolsCRL = tools3.result.tools.find(t => t.name === "refresh_crl");
+  assert(!!toolsCRL, "refresh_crl 工具存在");
+  // 不实际调用（需要 CRL_URL），只验证工具可发现
 
   // ━━━ 汇总 ━━━
   section(`结果：${passed} passed / ${failed} failed`);
