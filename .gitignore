@@ -3,3 +3,4 @@ keys/private.pem
 keys/
 .smart-figma/
 *.log
+.idea/

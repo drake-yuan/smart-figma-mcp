@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1e1e1e;
+      color: #e0e0e0;
+      padding: 16px;
+      font-size: 13px;
+    }
+    h2 { font-size: 15px; margin-bottom: 12px; color: #fff; }
+    .desc { color: #999; font-size: 12px; margin-bottom: 16px; line-height: 1.5; }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      transition: opacity 0.2s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #7c3aed; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #6d28d9; }
+    .btn-secondary { background: #333; color: #ccc; }
+    .btn-secondary:hover:not(:disabled) { background: #444; }
+    .progress { display: none; margin-top: 12px; }
+    .progress.active { display: block; }
+    .progress-bar-bg {
+      background: #333;
+      border-radius: 4px;
+      height: 6px;
+      margin: 8px 0;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      background: #7c3aed;
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    .result { margin-top: 8px; font-size: 12px; color: #999; }
+    .result .ok { color: #10b981; }
+    .result .err { color: #ef4444; }
+    .tips {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid #333;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.6;
+    }
+    .tips strong { color: #999; }
+  </style>
+</head>
+<body>
+  <h2>⚡ Auto Layoutify</h2>
+  <p class="desc">
+    一键将选中的 Frame 从自由布局转换为 Auto Layout。
+    转换后可零 Token 编译，还原精度大幅提升。
+  </p>
+
+  <button class="btn btn-primary" id="btnConvert">🚀 转换选中 Frame</button>
+  <button class="btn btn-secondary" id="btnCancel">关闭</button>
+
+  <div class="progress" id="progress">
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="fill" style="width: 0%"></div>
+    </div>
+    <div class="result" id="result"></div>
+  </div>
+
+  <div class="tips">
+    <strong>💡 提示</strong><br>
+    • 选中一个或多个 Frame 后点击转换<br>
+    • 插件会自动推断主轴方向、间距和 padding<br>
+    • 转换后 Frame 名称会添加 [Auto Layout] 标记<br>
+    • Ctrl+Z 可撤销转换<br>
+    • 转换后在 Smart Figma MCP 中重新编译 → 零 Token
+  </div>
+
+  <script>
+    const btnConvert = document.getElementById("btnConvert");
+    const btnCancel = document.getElementById("btnCancel");
+    const progress = document.getElementById("progress");
+    const fill = document.getElementById("fill");
+    const result = document.getElementById("result");
+
+    btnConvert.addEventListener("click", () => {
+      btnConvert.disabled = true;
+      progress.classList.add("active");
+      result.innerHTML = '<span class="ok">⏳ 正在转换...</span>';
+      fill.style.width = "0%";
+      parent.postMessage({ pluginMessage: { type: "auto-layoutify" } }, "*");
+    });
+
+    btnCancel.addEventListener("click", () => {
+      parent.postMessage({ pluginMessage: { type: "cancel" } }, "*");
+    });
+
+    window.addEventListener("message", (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      if (msg.type === "progress") {
+        const pct = Math.round((msg.current / msg.total) * 100);
+        fill.style.width = pct + "%";
+        result.innerHTML = `
+          <span class="ok">⏳ ${msg.current}/${msg.total}</span>
+          ${msg.lastNode ? ' — ' + msg.lastNode : ''}
+          ${msg.errors > 0 ? '<br><span class="err">跳过 ' + msg.errors + ' 个</span>' : ''}
+        `;
+      } else if (msg.type === "done") {
+        btnConvert.disabled = false;
+        if (msg.converted > 0 && msg.errors === 0) {
+          result.innerHTML = `<span class="ok">✅ 成功转换 ${msg.converted} 个 Frame！<br>Ctrl+Z 可撤销，重新导出后可零 Token 编译。</span>`;
+        } else if (msg.converted > 0) {
+          result.innerHTML = `<span class="ok">✅ ${msg.converted} 个成功</span> <span class="err">${msg.errors} 个跳过</span>`;
+        } else {
+          result.innerHTML = '<span class="err">⚠️ 没有可转换的 Frame。请选中包含多个子节点的 Frame 后重试。</span>';
+        }
+      }
+    });
+  </script>
+</body>
+</html>

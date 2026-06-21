@@ -1,6 +1,6 @@
 {
   "name": "smart-figma-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Smart Figma-to-Code MCP Server — BYOK + offline Ed25519 license + server-side quota. Zero-dependency runnable skeleton.",
   "type": "module",
   "bin": {

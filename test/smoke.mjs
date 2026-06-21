@@ -185,6 +185,100 @@ const LOCAL_BUTTON = {
   section("8) 版本号");
   assert(init.result.serverInfo.version !== "5.0.0", "版本号不再是硬编码 5.0.0");
 
+  // ━━━ 新增 0.3.0 测试 ━━━
+  // 9a) 坐标流编译（MODERATE 复杂度：无 Auto Layout 但有坐标流）
+  section("9a) 坐标流编译（MODERATE → COORDINATE_FLOW）");
+  const MODERATE_NODE = {
+    name: "Card",
+    x: 0, y: 0, width: 320, height: 200,
+    children: [
+      { name: "header", x: 16, y: 16, width: 288, height: 48 },
+      { name: "body1", x: 16, y: 80, width: 136, height: 96 },
+      { name: "body2", x: 168, y: 80, width: 136, height: 96 },
+    ],
+  };
+  const r5 = await call("tools/call", {
+    name: "compile_figma_component",
+    arguments: { figmaNode: MODERATE_NODE, projectRoot: "/tmp/demo-proj" },
+  });
+  const c5 = r5.result.content[0].text;
+  const j5 = JSON.parse(c5);
+  assert(j5.strategy === "SEMANTIC", "MODERATE 节点 → SEMANTIC 策略");
+  assert(j5.coordinateFlow?.grid?.axis, "坐标流含 axis 方向");
+  assert(j5.coordinateFlow?.grid?.rows?.length >= 2, "坐标流含 ≥2 行");
+  assert(j5.tailwind, "坐标流输出 tailwind");
+  console.log(`    轴方向: ${j5.coordinateFlow.grid.axis}, 行数: ${j5.coordinateFlow.grid.rows.length}`);
+
+  // 9b) 递归编译模式
+  section("9b) 递归编译（mode=recursive）");
+  const RECURSIVE_NODE = {
+    name: "Page",
+    layoutMode: "VERTICAL",
+    itemSpacing: 16,
+    paddingTop: 16,
+    paddingLeft: 24,
+    paddingRight: 24,
+    children: [
+      { name: "Header", layoutMode: "HORIZONTAL", itemSpacing: 8, children: [
+        { name: "Logo", width: 40, height: 40 },
+        { name: "Nav", layoutMode: "HORIZONTAL", itemSpacing: 12, children: [
+          { name: "link1", text: "Home" },
+          { name: "link2", text: "About" },
+        ]},
+      ]},
+      { name: "Body", children: [{ name: "card", width: 200, x: 24, y: 80 }] },
+    ],
+  };
+  const r6 = await call("tools/call", {
+    name: "compile_figma_component",
+    arguments: { figmaNode: RECURSIVE_NODE, mode: "recursive", projectRoot: "/tmp/demo-proj" },
+  });
+  const j6 = JSON.parse(r6.result.content[0].text);
+  assert(j6.recursiveTree?.children?.length >= 2, "递归树含 ≥2 个子节点");
+  assert(j6.recursiveTree?.children?.[0]?.name === "Header", "递归第 1 层 name 匹配");
+  assert(j6.recursiveTree?.children?.[0]?.children, "Header 下也有子节点");
+
+  // 9c) 多格式输出
+  section("9c) 多格式输出");
+  for (const fmt of ["css-modules", "scss", "styled-components"]) {
+    const rFmt = await call("tools/call", {
+      name: "compile_figma_component",
+      arguments: { figmaNode: SIMPLE_NODE, styleFormat: fmt, projectRoot: "/tmp/demo-proj" },
+    });
+    const jFmt = JSON.parse(rFmt.result.content[0].text);
+    assert(jFmt.styleFormat === fmt, `styleFormat=${fmt}`);
+    assert(jFmt.formattedOutput, `formattedOutput 非空 (${fmt})`);
+    assert(jFmt.formattedOutput !== `className="${jFmt.tailwind}"`, `${fmt} 输出不同于 Tailwind`);
+    console.log(`    ${fmt}: ${jFmt.formattedOutput.slice(0, 60)}...`);
+  }
+
+  // 9d) 响应式断点检测
+  section("9d) 响应式断点检测");
+  const SIBLINGS = [
+    { name: "Button / Desktop" },
+    { name: "Button / Tablet" },
+    { name: "Button / Mobile" },
+  ];
+  const rRes = await call("tools/call", {
+    name: "compile_figma_component",
+    arguments: { figmaNode: SIMPLE_NODE, siblings: SIBLINGS, projectRoot: "/tmp/demo-proj" },
+  });
+  const jRes = JSON.parse(rRes.result.content[0].text);
+  assert(jRes.responsive?.detected, "检测到响应式断点");
+  assert(jRes.responsive?.breakpoints?.desktop, "含 desktop 断点");
+  assert(jRes.responsive?.breakpoints?.mobile, "含 mobile 断点");
+
+  // 9e) 复杂度可视化报告
+  section("9e) 复杂度可视化报告");
+  const rViz = await call("tools/call", {
+    name: "compile_figma_component",
+    arguments: { figmaNode: SIMPLE_NODE, projectRoot: "/tmp/demo-proj" },
+  });
+  const jViz = JSON.parse(rViz.result.content[0].text);
+  assert(jViz.complexityReport?.includes("复杂度"), "复杂度报告含中文标题");
+  assert(jViz.complexityReport?.includes("█"), "复杂度报告含进度条");
+  console.log("\n" + jViz.complexityReport);
+
   // ━━━ 汇总 ━━━
   section(`结果：${passed} passed / ${failed} failed`);
   child.kill();

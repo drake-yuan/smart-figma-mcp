@@ -16,7 +16,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { verifyLicenseOffline, deviceFingerprint, DEMO_PUBLIC_KEY_PEM } from "./license.js";
 import { resolveLLMConfig } from "./byok.js";
-import { compileFigmaLayout, analyzeComplexity } from "./compiler.js";
+import {
+  compileFigmaLayout,
+  compileCoordinateFlow,
+  compileRecursive,
+  formatOutput,
+  FORMAT_LIST,
+  analyzeComplexity,
+  visualizeComplexity,
+  detectResponsiveBreakpoints,
+} from "./compiler.js";
 import { debit, CREDIT_COST } from "./quota.js";
 import { mapToVariant, rememberMapping, lookupMapping } from "./mapping.js";
 import { getNode as figmaGetNode, getFile as figmaGetFile } from "./figma-client.js";
@@ -97,6 +106,7 @@ function toolCompile(args) {
   if (!node) return errContent("缺少 figmaNode（请传入节点 JSON 或 figmaUrl）。");
 
   const complexity = analyzeComplexity(node);
+  const styleFormat = args.styleFormat || "tailwind";
 
   if (complexity.level === "COMPLEX") {
     return okContent(JSON.stringify({
@@ -105,6 +115,7 @@ function toolCompile(args) {
       message: "检测到此设计稿未使用 Auto Layout。建议在 Figma 端一键转换为 Auto Layout 后重试，" +
         "可大幅提升还原精度（详见 figma_auto_layoutify 引导）。",
       complexity,
+      complexityReport: visualizeComplexity(complexity),
     }, null, 2));
   }
 
@@ -118,7 +129,28 @@ function toolCompile(args) {
     return errContent(`配额不足：${charge.reason}（本次需 ${charge.cost} credits）。`);
   }
 
-  const tailwind = compileFigmaLayout(node);
+  // 编译：根据策略选不同路径
+  let tailwind, coordinateFlow, recursiveTree;
+  const mode = args.mode || "flat";
+
+  if (mode === "recursive") {
+    // 递归编译整棵子树
+    recursiveTree = compileRecursive(node);
+    tailwind = recursiveTree.tailwind || "";
+  } else if (complexity.level === "MODERATE") {
+    // 中等复杂度：坐标流推断 + 纯数字编译
+    coordinateFlow = compileCoordinateFlow(node);
+    tailwind = coordinateFlow.tailwind;
+  } else {
+    // SIMPLE：纯 Auto Layout 编译
+    tailwind = compileFigmaLayout(node);
+  }
+
+  // 响应式检测
+  let responsive = null;
+  if (args.siblings && Array.isArray(args.siblings)) {
+    responsive = detectResponsiveBreakpoints(args.siblings);
+  }
 
   let mapping = null;
   if (node.componentKey && args.projectRoot) {
@@ -129,7 +161,10 @@ function toolCompile(args) {
     }
   }
 
-  const assembly = buildAssemblyPrompt({ node, tailwind, mapping, complexity });
+  // 按指定格式输出
+  const formattedOutput = formatOutput(tailwind, styleFormat);
+
+  const assembly = buildAssemblyPrompt({ node, tailwind: formattedOutput, mapping, complexity, styleFormat });
 
   // 续期提醒
   let renewNotice = null;
@@ -146,9 +181,15 @@ function toolCompile(args) {
       ? { mode: "BYOK", provider: llm.provider, note: "token 走用户账单，我方零变动成本" }
       : { mode: "CREDITS", charged: charge.cost, remaining: charge.remaining },
     strategy: complexity.strategy,
+    complexityReport: visualizeComplexity(complexity),
     tailwind,
+    formattedOutput,
+    styleFormat,
     mapping,
     assemblyPrompt: assembly,
+    ...(coordinateFlow && { coordinateFlow }),
+    ...(recursiveTree && { recursiveTree }),
+    ...(responsive && { responsive }),
     ...(renewNotice && { renewNotice }),
   }, null, 2));
 }
@@ -197,10 +238,13 @@ function parseFigmaUrl(url) {
   return { fileKey, nodeId };
 }
 
-function buildAssemblyPrompt({ node, tailwind, mapping, complexity }) {
+function buildAssemblyPrompt({ node, tailwind, mapping, complexity, styleFormat }) {
+  const styleLabel = styleFormat === "tailwind" ? "Tailwind" :
+    styleFormat === "css-modules" ? "CSS Modules" :
+    styleFormat === "scss" ? "SCSS" : "Styled Components";
   const lines = [
-    `【几何骨架 — 禁止猜测物理数值，策略：${complexity.strategy}】`,
-    `容器布局类名（Node.js 确定性编译，直接使用）：${tailwind || "(无 Auto Layout)"}`,
+    `【几何骨架 — 禁止猜测物理数值，策略：${complexity.strategy}，输出格式：${styleLabel}】`,
+    `容器布局（${styleFormat}）：${tailwind || "(无 Auto Layout)"}`,
   ];
   if (mapping) {
     lines.push(
@@ -269,6 +313,9 @@ const TOOLS = [
         figmaToken: { type: "string", description: "Figma Personal Access Token（优先级高于环境变量 FIGMA_ACCESS_TOKEN）" },
         projectRoot: { type: "string", description: "用户项目根目录" },
         localComponent: { type: "object", description: "本地组件元信息(name/importPath/variants)" },
+        styleFormat: { type: "string", enum: FORMAT_LIST, description: "输出样式格式：tailwind/css-modules/scss/styled-components（默认 tailwind）" },
+        mode: { type: "string", enum: ["flat", "recursive"], description: "编译模式：flat 仅编译外层容器，recursive 递归编译整棵子树（默认 flat）" },
+        siblings: { type: "array", description: "兄弟节点列表，用于检测响应式断点" },
       },
     },
   },
