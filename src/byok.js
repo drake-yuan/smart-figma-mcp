@@ -1,11 +1,12 @@
-// byok.js — Bring Your Own Key v2
-// token 成本直接走用户自己的账单，与我方零关。我方月费只卖工程编排能力。
+// byok.js — Bring Your Own Key (BYOK) v2
+// LLM token cost is billed directly to the user's own account, never ours.
+// Our subscription fee sells only the engineering orchestration layer.
 //
-// v2 新增：deepseek / zhipu provider、Key 有效性检测、安全提醒
+// v2 additions: deepseek / zhipu providers, API key validity probe, security warning.
 
 const SUPPORTED = ["anthropic", "openai", "gemini", "deepseek", "zhipu"];
 
-// 各 provider 的 base URL + models 探测端点
+// Base URL + probe model for each provider.
 const PROVIDER_META = {
   anthropic: { baseURL: "https://api.anthropic.com", model: "claude-3-haiku-20240307" },
   openai: { baseURL: "https://api.openai.com/v1", model: "gpt-3.5-turbo" },
@@ -15,8 +16,9 @@ const PROVIDER_META = {
 };
 
 /**
- * 从环境变量读取 BYOK 配置。
- * 返回 { byok:true } 表示用户自带 key；否则走 Credits 制（我方代付）。
+ * Resolve the BYOK configuration from environment variables.
+ * Returns { byok: true } when the user supplies their own key; otherwise
+ * falls back to the Credits model (cost covered by us, quota-limited).
  */
 export function resolveLLMConfig(env = process.env) {
   const provider = (env.LLM_PROVIDER || "").toLowerCase();
@@ -29,13 +31,13 @@ export function resolveLLMConfig(env = process.env) {
     const meta = PROVIDER_META[provider];
     return { byok: true, provider, apiKey, baseURL: meta.baseURL, model: meta.model, masked: maskKey(apiKey) };
   }
-  // 未配置 key → 退回 Credits 制（我方代付，受配额限制）
+  // No key configured -> fall back to the Credits model (we pay, quota-limited).
   return { byok: false };
 }
 
 /**
- * Key 有效性快速检测（≤1 请求，不影响启动速度）。
- * 向 provider 发一个极轻量请求（如 models list 或 chat completion with 1 token）。
+ * Lightweight API key validity probe (<= 1 request, does not slow startup).
+ * Sends a minimal request to the provider (models list, or a 1-token chat completion).
  */
 export async function probeKey(config) {
   if (!config.byok) return { valid: false, reason: "no_key" };
@@ -63,11 +65,11 @@ export async function probeKey(config) {
         signal: AbortSignal.timeout(5000),
       });
     } else {
-      // gemini: 不做探测，避免 1 token 调用
+      // gemini: skip probing to avoid a billable 1-token call.
       return { valid: true, note: "skipped" };
     }
 
-    // 401/403 → 无效；2xx → 有效；其他 → 不确定
+    // 401/403 -> invalid; 2xx -> valid; anything else -> inconclusive.
     if (res.status === 401 || res.status === 403) return { valid: false, reason: "unauthorized" };
     if (res.ok) return { valid: true };
     return { valid: false, reason: `HTTP ${res.status}`, unsure: true };
@@ -76,12 +78,12 @@ export async function probeKey(config) {
   }
 }
 
-/** Key 安全提醒（检测明文传递） */
+/** Security reminder: detect API keys passed in plaintext. */
 export function securityWarning(config) {
   if (!config.byok) return null;
-  // 检测 key 是否来自环境变量明文（.env 文件未 gitignored 的风险）
+  // Detect a key sourced from a plaintext env var (risk of a non-gitignored .env file).
   if (process.env.LLM_API_KEY && !process.env.LLM_API_KEY_SECRET) {
-    return "⚠️  你的 API Key 以明文方式通过环境变量传递。请确认 .env 文件已在 .gitignore 中。推荐使用系统密钥链存储。";
+    return "⚠️  Your API key is being passed in plaintext via an environment variable. Make sure your .env file is in .gitignore. Using a system keychain is recommended.";
   }
   return null;
 }

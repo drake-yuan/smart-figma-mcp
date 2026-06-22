@@ -1,12 +1,13 @@
-// figma-screenshot.js — Figma 节点截图获取 + 本地缓存
+// figma-screenshot.js — fetch Figma node screenshots + local cache.
 //
-// 多模态降级：当复杂度为 VISUAL 时，自动拉取节点 PNG 截图，
-// 传给用户的 LLM 做视觉理解（以视代算），而非硬算布局。
+// Multimodal fallback: when complexity is VISUAL, automatically pull the node's PNG
+// screenshot and pass it to the user's LLM for visual understanding (vision over
+// computation), instead of brute-forcing the layout.
 //
-// 特性：
-//   - 调用 Figma REST API GET /v2/images
-//   - 本地文件缓存（30 天有效期，与 Figma CDN 过期一致）
-//   - 缓存命中直接返回本地路径，跳过 API 调用
+// Features:
+//   - calls the Figma REST API GET /v1/images/:key (separate top-level endpoint)
+//   - local file cache (30-day TTL, matching the Figma CDN expiry)
+//   - on cache hit, returns the local path and skips the API call
 
 import fs from "node:fs";
 import path from "node:path";
@@ -15,7 +16,7 @@ import { createHash } from "node:crypto";
 import { figmaFetch } from "./figma-client.js";
 
 const CACHE_DIR = path.join(os.homedir(), ".smart-figma", "cache", "screenshots");
-const CACHE_TTL = 30 * 86400000; // 30 天
+const CACHE_TTL = 30 * 86400000; // 30 days
 
 function ensureCacheDir() {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -34,10 +35,10 @@ function cacheMetaPath(fileKey, nodeId) {
 }
 
 /**
- * 获取节点截图，优先从缓存读取
+ * Fetch a node screenshot, preferring the cache.
  *
- * @param {string} fileKey - Figma 文件 Key
- * @param {string} nodeId  - 节点 ID（如 "1:2"）
+ * @param {string} fileKey - Figma file key
+ * @param {string} nodeId  - node id (e.g. "1:2")
  * @param {string} token   - Figma Personal Access Token
  * @param {Object} opts    - { format?, scale? }
  * @returns {Promise<{ localPath: string, url: string, fromCache: boolean }>}
@@ -50,7 +51,7 @@ export async function getScreenshot(fileKey, nodeId, token, opts = {}) {
   const format = opts.format || "png";
   const scale = opts.scale || 1;
 
-  // 检查缓存
+  // Check the cache.
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
     const age = Date.now() - meta.cachedAt;
@@ -65,21 +66,21 @@ export async function getScreenshot(fileKey, nodeId, token, opts = {}) {
         };
       }
     }
-  } catch { /* 缓存未命中 */ }
+  } catch { /* cache miss */ }
 
-  // 调用 Figma API
+  // Call the Figma API.
   const encodedId = encodeURIComponent(nodeId);
   const data = await figmaFetch(
-    `/v2/files/${fileKey}/images?ids=${encodedId}&format=${format}&scale=${scale}`,
+    `/v1/images/${fileKey}?ids=${encodedId}&format=${format}&scale=${scale}`,
     token
   );
 
   const imageUrl = data?.images?.[nodeId];
   if (!imageUrl) {
-    throw new Error(`Figma API 未返回节点 ${nodeId} 的截图 URL`);
+    throw new Error(`Figma API did not return a screenshot URL for node ${nodeId}`);
   }
 
-  // 下载并缓存图片
+  // Download and cache the image.
   const imageData = await downloadImage(imageUrl);
   fs.writeFileSync(pngPath, imageData);
   fs.writeFileSync(metaPath, JSON.stringify({
@@ -100,7 +101,7 @@ export async function getScreenshot(fileKey, nodeId, token, opts = {}) {
 }
 
 /**
- * 批量获取多个节点的截图
+ * Fetch screenshots for multiple nodes in a batch.
  */
 export async function getScreenshots(fileKey, nodeIds, token, opts = {}) {
   ensureCacheDir();
@@ -109,7 +110,7 @@ export async function getScreenshots(fileKey, nodeIds, token, opts = {}) {
 
   const idsQuery = nodeIds.map(id => encodeURIComponent(id)).join(",");
   const data = await figmaFetch(
-    `/v2/files/${fileKey}/images?ids=${idsQuery}&format=${format}&scale=${scale}`,
+    `/v1/images/${fileKey}?ids=${idsQuery}&format=${format}&scale=${scale}`,
     token
   );
 
@@ -139,7 +140,7 @@ export async function getScreenshots(fileKey, nodeIds, token, opts = {}) {
 }
 
 /**
- * 清除过期缓存
+ * Clear expired cache entries.
  */
 export function clearExpiredCache() {
   try {
@@ -162,6 +163,6 @@ export function clearExpiredCache() {
 
 async function downloadImage(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`下载截图失败：${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to download screenshot: ${res.status} ${res.statusText}`);
   return Buffer.from(await res.arrayBuffer());
 }

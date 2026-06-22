@@ -1,22 +1,23 @@
 // Auto Layoutify — Smart Figma MCP Plugin
-// 一键将选中 Frame 从自由布局转换为 Auto Layout，源头治理非标稿。
+// One-click conversion of a selected Frame from free-form layout to Auto Layout
+// (source-side fix for non-standard designs).
 //
-// 用法：
-//   1. 在 Figma 中选中要转换的 Frame
-//   2. Plugins → Development → Import from manifest.json → 选中本项目 figma-plugin/
-//   3. 点击「Auto Layoutify」按钮
-//   4. 等待转换完成 → 重新导出节点 → compile_figma_component 零 Token 编译
+// Usage:
+//   1. Select the Frame(s) to convert in Figma
+//   2. Plugins -> Development -> Import from manifest.json -> pick this project's figma-plugin/
+//   3. Click the "Auto Layoutify" button
+//   4. Wait for completion -> re-export the node -> compile_figma_component runs zero-token compile
 
 "use strict";
 
-// ─── 主命令 ───
+// ─── Main command ───
 figma.showUI(__html__, { width: 320, height: 380 });
 
 figma.ui.onmessage = async function (msg) {
   if (msg.type === "auto-layoutify") {
     const selection = figma.currentPage.selection;
     if (selection.length === 0) {
-      figma.notify("⚠️ 请先选中要转换的 Frame", { error: true });
+      figma.notify("⚠️ Please select a Frame to convert first", { error: true });
       figma.ui.postMessage({ type: "done", converted: 0, errors: 0 });
       return;
     }
@@ -45,7 +46,7 @@ figma.ui.onmessage = async function (msg) {
       });
     }
 
-    figma.notify(`✅ 已转换 ${converted} 个 Frame 为 Auto Layout${errors > 0 ? `（${errors} 个跳过）` : ""}`);
+    figma.notify(`✅ Converted ${converted} Frame(s) to Auto Layout${errors > 0 ? ` (${errors} skipped)` : ""}`);
     figma.ui.postMessage({ type: "done", converted, errors });
   } else if (msg.type === "cancel") {
     figma.closePlugin();
@@ -54,30 +55,30 @@ figma.ui.onmessage = async function (msg) {
   }
 };
 
-// ─── Auto Layoutify 核心 ───
+// ─── Auto Layoutify core ───
 
 async function autoLayoutify(node) {
-  // 只处理 Frame / Component / Instance / Group
+  // Only handle Frame / Component / Instance / Group.
   const SUPPORTED = new Set(["FRAME", "COMPONENT", "INSTANCE", "GROUP"]);
   if (!SUPPORTED.has(node.type)) return false;
 
   const children = (node.children || []).filter(
     (c) => c.visible !== false && !c.isAsset
   );
-  if (children.length < 2) return false; // 单个子节点不需要 Auto Layout
+  if (children.length < 2) return false; // a single child does not need Auto Layout
 
-  // 1. 收集子节点坐标
+  // 1. Collect child coordinates.
   const positions = children.map((c) => ({
     node: c,
     x: c.x,
     y: c.y,
     w: c.width,
     h: c.height,
-    cx: c.x + c.width / 2, // 重心 X
-    cy: c.y + c.height / 2, // 重心 Y
+    cx: c.x + c.width / 2, // centroid X
+    cy: c.y + c.height / 2, // centroid Y
   }));
 
-  // 2. 判断主轴方向（水平 vs 垂直）
+  // 2. Determine the main axis (horizontal vs vertical).
   const xVals = positions.map((p) => p.cx);
   const yVals = positions.map((p) => p.cy);
   const xVariance = variance(xVals);
@@ -89,19 +90,19 @@ async function autoLayoutify(node) {
   } else if (yVariance > xVariance * 2) {
     direction = "VERTICAL";
   } else {
-    // 方差相近 → 根据实际 x/y 范围判断
+    // Variances are close -> decide from the actual x/y range.
     const xRange = Math.max(...xVals) - Math.min(...xVals);
     const yRange = Math.max(...yVals) - Math.min(...yVals);
     direction = xRange > yRange ? "HORIZONTAL" : "VERTICAL";
   }
 
-  // 3. 推断间距（同一轴聚类后用众数）
+  // 3. Infer spacing (cluster on one axis, then take the mode).
   const clusterKey = direction === "HORIZONTAL" ? "cy" : "cx";
   const sortKeyRow = direction === "HORIZONTAL" ? "cy" : "cx";
   const sortKeyCol = direction === "HORIZONTAL" ? "x" : "y";
   const sizeKey = direction === "HORIZONTAL" ? "w" : "h";
 
-  // Y 聚类（水平布局时行聚类）
+  // Cluster on Y (row clustering for horizontal layout).
   const TOLERANCE = 4;
   const sorted = [...positions].sort((a, b) => a[sortKeyRow] - b[sortKeyRow]);
   const rows = [];
@@ -116,9 +117,9 @@ async function autoLayoutify(node) {
   }
   rows.push(currentRow);
 
-  // 4. 收集间距
-  const gapsPrimary = []; // 主轴间距（行内元素间距）
-  const gapsCross = []; // 交叉轴间距（行间距）
+  // 4. Collect spacing.
+  const gapsPrimary = []; // primary-axis spacing (between items in a row)
+  const gapsCross = []; // cross-axis spacing (between rows)
 
   for (const row of rows) {
     row.children.sort((a, b) => a[sortKeyCol] - b[sortKeyCol]);
@@ -142,7 +143,7 @@ async function autoLayoutify(node) {
   const gapPrimary = Math.round(mode(gapsPrimary) || 0);
   const gapCross = Math.round(mode(gapsCross) || 0);
 
-  // 5. 推断 padding
+  // 5. Infer padding.
   const firstChild = rows[0].children[0];
   const lastRow = rows[rows.length - 1];
   const lastChild = lastRow.children[lastRow.children.length - 1];
@@ -152,7 +153,7 @@ async function autoLayoutify(node) {
     (direction === "HORIZONTAL" ? rows[0].key : firstChild[sortKeyRow]) - node.y
   );
 
-  // 6. 计算内容宽高（用于推断 paddingRight / paddingBottom）
+  // 6. Compute content size (to infer paddingRight / paddingBottom).
   let maxRight = 0;
   let maxBottom = 0;
   for (const p of positions) {
@@ -165,15 +166,15 @@ async function autoLayoutify(node) {
   const padRight = Math.max(0, Math.round(node.width - maxRight));
   const padBottom = Math.max(0, Math.round(node.height - maxBottom));
 
-  // 7. 应用 Auto Layout（带 undo）
-  // 先 remove 所有子节点，应用 layout，再 append 回来——保持层级
+  // 7. Apply Auto Layout (undoable).
+  // Remove all children first, apply the layout, then append them back to preserve hierarchy.
   const childNodes = [...node.children];
   for (const child of childNodes) {
     node.removeChild(child);
   }
 
   node.layoutMode = direction;
-  // primaryAxisAlignItems / counterAxisAlignItems 默认为 MIN（左/上对齐）
+  // primaryAxisAlignItems / counterAxisAlignItems default to MIN (left/top aligned).
   node.primaryAxisAlignItems = "MIN";
   node.counterAxisAlignItems = "MIN";
 
@@ -184,23 +185,23 @@ async function autoLayoutify(node) {
   if (padTop > 0) node.paddingTop = padTop;
   if (padBottom > 0) node.paddingBottom = padBottom;
 
-  // 如果有多行（wrap layout）
+  // Multiple rows -> wrap layout.
   if (rows.length > 1) {
     node.layoutWrap = "WRAP";
   }
 
-  // 重新 append 子节点
+  // Append children back.
   for (const child of childNodes) {
     node.appendChild(child);
   }
 
-  // 标注 Auto Layout 已应用
+  // Mark that Auto Layout has been applied.
   node.name = node.name.replace(/\s*\[Auto Layout\]$/, "") + " [Auto Layout]";
 
   return true;
 }
 
-// ─── 工具函数 ───
+// ─── Utilities ───
 
 function variance(arr) {
   if (arr.length < 2) return 0;

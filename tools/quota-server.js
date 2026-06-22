@@ -1,8 +1,8 @@
-// quota-server.js — 服务端权威账本 API
-// 部署：可作为独立 Express/Cloudflare Worker 运行，接收客户端的配额扣减请求。
-// 用法：node tools/quota-server.js  →  http://localhost:3030
+// quota-server.js — authoritative server-side ledger API
+// Deploy: runs as a standalone Express / Cloudflare Worker; receives quota-deduction requests from clients.
+// Usage: node tools/quota-server.js  ->  http://localhost:3030
 //
-// 铁律：所有扣减以服务端为准。客户端 quota.js 不可信任（可被篡改）。
+// Iron rule: every deduction is authoritative on the server. The client quota.js is never trusted (it can be tampered with).
 
 import http from "node:http";
 import crypto from "node:crypto";
@@ -30,7 +30,7 @@ function currentPeriod() {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-// 清理过期幂等键（1h 后失效）
+// Purge expired idempotency keys (expire after 1h).
 function cleanIdem(db) {
   const now = Date.now();
   for (const [k, v] of Object.entries(db.idem)) {
@@ -57,7 +57,7 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  // POST /quota/debit — 扣减配额
+  // POST /quota/debit — deduct quota
   if (req.method === "POST" && url.pathname === "/quota/debit") {
     const body = await readBody(req);
     if (!body || !body.sub || !body.strategy || !body.idempotency_key) {
@@ -67,7 +67,7 @@ const server = http.createServer(async (req, res) => {
     const db = loadDB();
     cleanIdem(db);
 
-    // 幂等检查
+    // Idempotency check.
     if (db.idem[body.idempotency_key]) {
       return json(res, 200, { ok: true, dedup: true });
     }
@@ -89,7 +89,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, cost, remaining: quota.limit - quota.used });
   }
 
-  // GET /quota/status?sub=xxx&period=YYYY-MM  — 查询配额
+  // GET /quota/status?sub=xxx&period=YYYY-MM — query quota
   if (req.method === "GET" && url.pathname === "/quota/status") {
     const sub = url.searchParams.get("sub");
     const period = url.searchParams.get("period") || currentPeriod();
@@ -108,7 +108,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  // POST /quota/reset — 重置指定用户配额（管理接口）
+  // POST /quota/reset — reset a user's quota (admin endpoint)
   if (req.method === "POST" && url.pathname === "/quota/reset") {
     const body = await readBody(req);
     if (!body || !body.sub) return json(res, 400, { error: "missing sub" });
@@ -121,7 +121,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true });
   }
 
-  // POST /quota/set-limit — 设置用户月度配额（管理接口）
+  // POST /quota/set-limit — set a user's monthly quota (admin endpoint)
   if (req.method === "POST" && url.pathname === "/quota/set-limit") {
     const body = await readBody(req);
     if (!body || !body.sub || typeof body.limit !== "number") return json(res, 400, { error: "missing sub/limit" });
@@ -134,7 +134,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true });
   }
 
-  // GET /health — 健康检查
+  // GET /health — health check
   if (req.method === "GET" && url.pathname === "/health") {
     return json(res, 200, { status: "ok", uptime: process.uptime() });
   }

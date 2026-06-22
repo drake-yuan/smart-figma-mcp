@@ -1,9 +1,9 @@
-// issue-license.js — 发证 v2（发证服务器侧，持有私钥）
-// 用法： node tools/issue-license.js --sub user@x.com --plan maker --days 30 --devices fp1,fp2 --quota-monthly 500
-// 产出： 一个离线 license token，发给付费用户填进 MCP 配置的 SMART_FIGMA_LICENSE。
+// issue-license.js — license issuance v2 (issuing-server side, holds the private key)
+// Usage: node tools/issue-license.js --sub user@x.com --plan maker --days 30 --devices fp1,fp2 --quota-monthly 500
+// Output: an offline license token to hand to a paying user; goes into the MCP env var SMART_FIGMA_LICENSE.
 //
-// v2 新增：--devices 多设备绑定、--quota-monthly 自定义配额、签发日志(keys/issue-log.jsonl)
-// v3 新增：导出 issueLicense() 函数供 batch-issue.js 复用
+// v2 additions: --devices multi-device binding, --quota-monthly custom quota, issuance log (keys/issue-log.jsonl)
+// v3 additions: export issueLicense() so batch-issue.js can reuse it
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -28,10 +28,9 @@ const PLAN_QUOTA = {
 export function issueLicense({ sub, plan, days, devicesRaw, quotaMonthly }) {
   const privPath = path.join(__dirname, "..", "keys", "private.pem");
   if (!fs.existsSync(privPath)) {
-    throw new Error("❌ 找不到 keys/private.pem，请先运行 `npm run keygen`");
+    throw new Error("❌ keys/private.pem not found. Run `npm run keygen` first.");
   }
   const privateKey = crypto.createPrivateKey(fs.readFileSync(privPath, "utf8"));
-
   const baseQuota = PLAN_QUOTA[plan] || PLAN_QUOTA.maker;
   const quota = { ...baseQuota };
   if (quotaMonthly) quota.monthly = quotaMonthly;
@@ -56,19 +55,19 @@ export function issueLicense({ sub, plan, days, devicesRaw, quotaMonthly }) {
   const signature = crypto.sign(null, payloadBuf, privateKey);
   const token = `${b64urlEncode(payloadBuf)}.${b64urlEncode(signature)}`;
 
-  // 签发日志
+  // Issuance log
   const logPath = path.join(__dirname, "..", "keys", "issue-log.jsonl");
   try {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), action: "issue", jti, sub, plan, days, devices, quota: quota.monthly }) + "\n");
   } catch (e) {
-    console.error(`⚠️  签发日志写入失败: ${e.message}`);
+    console.error(`⚠️  Failed to write issuance log: ${e.message}`);
   }
 
   return { token, payload, jti };
 }
 
-// CLI 入口
+// CLI entry point
 if (process.argv[1] && (process.argv[1].endsWith("issue-license.js") || process.argv[1].endsWith("issue"))) {
   const sub = arg("sub", "demo@local");
   const plan = arg("plan", "maker");
@@ -78,10 +77,10 @@ if (process.argv[1] && (process.argv[1].endsWith("issue-license.js") || process.
 
   try {
     const result = issueLicense({ sub, plan, days, devicesRaw, quotaMonthly });
-    console.log("✅ License 已签发：\n");
+    console.log("✅ License issued:\n");
     console.log(result.token);
-    console.log("\nPayload：", JSON.stringify(result.payload, null, 2));
-    console.log(`\n📝 签发日志已记录到 keys/issue-log.jsonl (jti: ${result.jti})`);
+    console.log("\nPayload:", JSON.stringify(result.payload, null, 2));
+    console.log(`\n📝 Issuance logged to keys/issue-log.jsonl (jti: ${result.jti})`);
   } catch (e) {
     console.error(e.message);
     process.exit(1);

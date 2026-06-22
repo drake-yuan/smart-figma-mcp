@@ -1,34 +1,37 @@
-// mapping.js — Variant 级映射 + 私有映射资产库 v2（GPT-6 吞不掉的护城河）
+// mapping.js — variant-level mapping + private mapping asset library v2 (the moat GPT-6 can't eat)
 //
-// @codebase 知道你有 <Button>，但不会精确判断 Figma 节点 = <Button variant="destructive" size="sm">。
-// 这里做两件原生工具做不精的细活：
-//   1) 把 Figma 组件属性对齐到本地组件的 variant/props
-//   2) 把用户确认过的映射沉淀为私有资产(.smart-figma/mappings.json)，换工具就清零 → 切换成本
+// @codebase knows you have a <Button>, but it won't precisely decide that a Figma node
+// equals <Button variant="destructive" size="sm">. This module does the two fiddly things
+// native tools don't do well:
+//   1) align Figma component properties to the local component's variant/props
+//   2) persist user-confirmed mappings as a private asset (.smart-figma/mappings.json);
+//      switching tools wipes it -> switching cost
 //
-// v2 新增：CVA 解析器、自动扫描组件库、冲突裁决、别名扩展、映射健康检查、导出/导入
+// v2 additions: CVA parser, component-library auto-scan, conflict resolution,
+//               alias expansion, mapping health check, export/import.
 
 import fs from "node:fs";
 import path from "node:path";
 
-// ━━━ 语义别名表（Figma 命名习惯 → 代码 variant 习惯）━
+// ━━━ Semantic alias table (Figma naming conventions -> code variant conventions) ━━━
 const DEFAULT_ALIAS = {
-  // 状态
+  // state
   danger: "destructive", error: "destructive", warning: "secondary", success: "default",
   info: "ghost", disabled: "disabled", active: "default",
-  // 尺寸
+  // size
   small: "sm", medium: "md", large: "lg", xlarge: "xl", tiny: "xs", compact: "sm",
-  // 类型
+  // type
   primary: "default", secondary: "secondary", tertiary: "outline", ghost: "ghost",
   link: "link", text: "ghost", icon: "icon", pill: "default",
-  // 变体
+  // variant
   outlined: "outline", filled: "default", tonal: "secondary", plain: "ghost",
-  // 对齐
+  // alignment
   left: "start", right: "end", center: "center",
 };
 
 let ALIAS = { ...DEFAULT_ALIAS };
 
-/** 加载用户自定义别名覆盖 */
+/** Load user-defined alias overrides. */
 export function loadAliases(projectRoot) {
   try {
     const customPath = path.join(projectRoot, ".smart-figma", "aliases.json");
@@ -44,16 +47,16 @@ function normalize(v) {
   return ALIAS[key] || key;
 }
 
-// ━━━ CVA 解析器 ━━━
-/** 解析 cva() 调用，提取 variants 定义 */
+// ━━━ CVA parser ━━━
+/** Parse a cva() call and extract the variants definition. */
 export function parseCVA(source) {
   const result = { variants: {}, base: "" };
-  
-  // 提取 base 参数
+
+  // Extract the base argument.
   const baseMatch = source.match(/cva\(\s*["'`]([^"'`]*)["'`]/);
   if (baseMatch) result.base = baseMatch[1];
 
-  // 提取 variants 对象（处理嵌套花括号）
+  // Extract the variants object (handles nested braces).
   const vMatch = source.match(/variants:\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/s);
   if (!vMatch) return result;
 
@@ -65,21 +68,21 @@ export function parseCVA(source) {
       ? [...dim[1].replace(/\n/g, " ").matchAll(/(\w+):\s*["'`][^"'`]*["'`]/g)].map(m => m[1])
       : [...dim[2].matchAll(/(\w+):/g)].map(m => m[1]);
   }
-  
-  // Fallback: 提取 variant 维度名
+
+  // Fallback: extract variant dimension names.
   if (Object.keys(result.variants).length === 0) {
     const dimRe2 = /(\w+):\s*\{([^}]+)\}/g;
     while ((dim = dimRe2.exec(vBlock))) {
-      // 提取值名（key: "value" 或 key 是子 variant）
+      // Extract value names (key: "value", or key as a sub-variant).
       const vals = [...dim[2].matchAll(/(\w+):/g)].map(m => m[1]);
       result.variants[dim[1]] = vals.length > 0 ? vals : [];
     }
   }
-  
+
   return result;
 }
 
-// ━━━ 自动扫描组件库 ━━━
+// ━━━ Component-library auto-scan ━━━
 const KNOWN_LIBS = {
   "shadcn/ui": { glob: "src/components/ui/**/*.tsx", cva: true },
   "radix-ui": { glob: "src/components/ui/**/*.tsx", cva: false },
@@ -87,7 +90,7 @@ const KNOWN_LIBS = {
   "@mui/material": { glob: "src/components/**/*.tsx", cva: false },
 };
 
-/** 扫描项目中的组件依赖 */
+/** Detect component dependencies declared in the project. */
 function detectComponentLib(projectRoot) {
   try {
     const pkgPath = path.join(projectRoot, "package.json");
@@ -98,7 +101,7 @@ function detectComponentLib(projectRoot) {
   } catch { return []; }
 }
 
-/** 扫描目录下的 tsx 文件 */
+/** Recursively collect .tsx/.jsx files under a directory. */
 function globTsx(dir) {
   const results = [];
   try {
@@ -115,17 +118,17 @@ function globTsx(dir) {
   return results;
 }
 
-/** 从文件名提取组件名 */
+/** Derive a component name from a file name. */
 function extractComponentName(filePath) {
   const base = path.basename(filePath, path.extname(filePath));
-  // kebab-case / PascalCase → PascalCase
+  // kebab-case / PascalCase -> PascalCase
   return base
     .split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join("");
 }
 
-/** 自动扫描组件库，返回组件清单 */
+/** Auto-scan the component library and return a component manifest. */
 export function scanLocalComponents(projectRoot) {
   const libs = detectComponentLib(projectRoot);
   if (libs.length === 0) return [];
@@ -148,7 +151,7 @@ export function scanLocalComponents(projectRoot) {
       const hasCVA = source.includes("cva(");
       const cvaInfo = hasCVA ? parseCVA(source) : { variants: {} };
 
-      // 计算相对导入路径
+      // Compute the relative import path.
       let importPath = path.relative(path.join(projectRoot, "src"), file);
       importPath = "@/" + importPath.replace(/\\/g, "/").replace(/\.(tsx|jsx)$/, "");
 
@@ -166,23 +169,23 @@ export function scanLocalComponents(projectRoot) {
   return components;
 }
 
-// ━━━ 冲突裁决 ━━━
-/** 当多个候选组件匹配时，裁决最佳映射 */
+// ━━━ Conflict resolution ━━━
+/** When multiple candidate components match, pick the best mapping. */
 export function resolveMapping(figmaName, figmaProps, candidates) {
   const scored = candidates.map((c) => {
     let score = 0;
-    // 精确名匹配
+    // Exact name match.
     if (figmaName.toLowerCase() === c.name.toLowerCase()) score += 100;
     else if (figmaName.toLowerCase().includes(c.name.toLowerCase())) score += 50;
     else if (c.name.toLowerCase().includes(figmaName.toLowerCase())) score += 30;
 
-    // 属性维度匹配
+    // Property-dimension overlap.
     const figKeys = Object.keys(figmaProps || {});
     const candKeys = Object.keys(c.variants || {});
     const overlap = figKeys.filter((k) => candKeys.includes(k)).length;
     score += overlap * 30;
 
-    // 历史命中次数
+    // Historical hit count.
     score += (c.usageCount || 0) * 10;
 
     return { ...c, score };
@@ -195,7 +198,7 @@ export function resolveMapping(figmaName, figmaProps, candidates) {
   const best = scored[0];
   const runnerUp = scored[1];
 
-  // 置信度接近 → 返回多个候选，让 LLM/用户选择
+  // Confidence is close -> return multiple candidates and let the LLM/user choose.
   if (runnerUp && runnerUp.score > best.score * 0.8) {
     return { conflict: true, candidates: scored.slice(0, 3) };
   }
@@ -203,11 +206,11 @@ export function resolveMapping(figmaName, figmaProps, candidates) {
   return { component: best.name, importPath: best.importPath, confidence: best.score / 150, candidates: scored.slice(0, 3) };
 }
 
-// ━━━ 核心映射逻辑 ━━━
+// ━━━ Core mapping logic ━━━
 /**
- * 把 Figma 组件属性映射到本地组件的 variant props。
- * @param {object} figmaProps      例：{ State:"Danger", Size:"Small" }
- * @param {object} localComponent  例：{ name:"Button", importPath:"@/components/ui/button",
+ * Map Figma component properties to the local component's variant props.
+ * @param {object} figmaProps      e.g. { State:"Danger", Size:"Small" }
+ * @param {object} localComponent  e.g. { name:"Button", importPath:"@/components/ui/button",
  *                                        variants:{ variant:["default","destructive","outline"], size:["sm","md","lg"] } }
  */
 export function mapToVariant(figmaProps, localComponent) {
@@ -219,7 +222,7 @@ export function mapToVariant(figmaProps, localComponent) {
   for (const [figKey, figVal] of Object.entries(figmaProps || {})) {
     total++;
     const normVal = normalize(figVal);
-    // 找一个本地 variant 维度的取值集合命中
+    // Find a local variant dimension whose value set contains the normalized value.
     for (const [vKey, allowed] of Object.entries(variants)) {
       if (allowed.map(normalize).includes(normVal)) {
         props[vKey] = allowed.find((a) => normalize(a) === normVal);
@@ -238,7 +241,7 @@ export function mapToVariant(figmaProps, localComponent) {
   };
 }
 
-// ━━━ 私有映射资产库（持久化）━
+// ━━━ Private mapping asset library (persistence) ━━━
 
 function ledgerPath(projectRoot) {
   return path.join(projectRoot, ".smart-figma", "mappings.json");
@@ -257,7 +260,7 @@ function saveMappings(projectRoot, db) {
   fs.writeFileSync(ledgerPath(projectRoot), JSON.stringify(db, null, 2));
 }
 
-/** 记住一条用户确认过的映射（高置信，优先复用） */
+/** Remember a user-confirmed mapping (high confidence, preferred for reuse). */
 export function rememberMapping(projectRoot, entry) {
   const db = loadMappings(projectRoot);
   const idx = db.mappings.findIndex((m) => m.figmaComponentKey === entry.figmaComponentKey);
@@ -270,14 +273,14 @@ export function rememberMapping(projectRoot, entry) {
   return db.mappings.length;
 }
 
-/** 优先查已沉淀的映射资产（命中则零猜测、零 token） */
+/** Look up an existing mapping asset first (a hit means zero guessing, zero tokens). */
 export function lookupMapping(projectRoot, figmaComponentKey) {
   const db = loadMappings(projectRoot);
   return db.mappings.find((m) => m.figmaComponentKey === figmaComponentKey) || null;
 }
 
-// ━━━ 映射健康检查 ━━━
-/** 检查映射资产的引用是否仍然有效 */
+// ━━━ Mapping health check ━━━
+/** Check whether mapping-asset references are still valid. */
 export function checkMappingHealth(projectRoot) {
   const db = loadMappings(projectRoot);
   const stale = [];
@@ -293,13 +296,13 @@ export function checkMappingHealth(projectRoot) {
   return { total: db.mappings.length, stale: stale.length, staleEntries: stale };
 }
 
-// ━━━ 映射导出/导入 ━━━
-/** 导出映射资产为 JSON（可用于团队共享、迁移） */
+// ━━━ Mapping export / import ━━━
+/** Export mapping assets as JSON (for team sharing / migration). */
 export function exportMappings(projectRoot) {
   return loadMappings(projectRoot);
 }
 
-/** 从 JSON 导入映射资产（合并，不覆盖同名条目） */
+/** Import mapping assets from JSON (merge, do not overwrite existing keys). */
 export function importMappings(projectRoot, data) {
   const db = loadMappings(projectRoot);
   const existingKeys = new Set(db.mappings.map((m) => m.figmaComponentKey));

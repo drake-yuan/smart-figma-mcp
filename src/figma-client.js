@@ -1,23 +1,27 @@
-// figma-client.js — Figma REST API v2 封装（零外部依赖）
+// figma-client.js — Figma REST API v1 wrapper (zero external dependencies)
 //
-// 支持的接口：
-//   GET /v2/files/:key            → 文件元数据
-//   GET /v2/files/:key/nodes      → 节点详情（核心）
-//   GET /v2/files/:key/images     → 节点截图（多模态降级）
+// Supported endpoints (note: Figma REST is v1, and images is a separate top-level endpoint):
+//   GET /v1/files/:key            -> file metadata
+//   GET /v1/files/:key/nodes      -> node details (core)
+//   GET /v1/images/:key           -> node screenshots (multimodal fallback; top-level, not under /files)
 //
-// 特性：指数退避重试、15s 超时、跨境友好错误提示、HTTP_PROXY 支持
+// Features: exponential backoff retry, 15s timeout, cross-border-friendly errors,
+//           HTTP(S)_PROXY support via a CONNECT tunnel.
 
-// 指数退避休眠
+import http from "node:http";
+import https from "node:https";
+
+// Exponential-backoff sleep.
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 const BASE = "https://api.figma.com";
-const DEFAULT_TIMEOUT = 15000; // 15s，跨境网络友好
+const DEFAULT_TIMEOUT = 15000; // 15s, friendly to cross-border networks
 const MAX_RETRIES = 3;
 
 /**
- * 底层 fetch 封装：超时 + 429 重试 + HTTP_PROXY
+ * Low-level fetch wrapper: timeout + 429 retry + HTTP_PROXY.
  */
 export async function figmaFetch(path, token, opts = {}) {
   const url = `${BASE}${path}`;
@@ -34,12 +38,13 @@ export async function figmaFetch(path, token, opts = {}) {
     signal: controller.signal,
   };
 
-  // HTTP_PROXY 支持（Node 18+ fetch 不原生支持 proxy，用 undici 的 ProxyAgent 又破坏零依赖）
-  // 所以：如果有 HTTP_PROXY，改用 https 模块（Node 内置）
+  // HTTP_PROXY support. Node 18+ fetch does not natively support proxies, and using
+  // undici's ProxyAgent would break the zero-dependency rule, so when a proxy is set
+  // we fall back to the built-in http/https modules.
   const proxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
   if (proxy) {
     clearTimeout(timer);
-    return legacyFetchWithProxy(url, token, timeout, proxy);
+    return fetchViaProxy(url, token, timeout, proxy);
   }
 
   let lastError;
@@ -49,13 +54,13 @@ export async function figmaFetch(path, token, opts = {}) {
       clearTimeout(timer);
 
       if (res.status === 429) {
-        // 速率限制 → 指数退避
+        // Rate limited -> exponential backoff.
         const retryAfter = parseInt(res.headers.get("Retry-After")) || Math.pow(2, attempt + 1);
         if (attempt < MAX_RETRIES) {
           await sleep(retryAfter * 1000);
           continue;
         }
-        throw new Error(`Figma API 速率限制，请稍后重试（等待 ${retryAfter}s）。`);
+        throw new Error(`Figma API rate limited; please retry shortly (waited ${retryAfter}s).`);
       }
 
       if (!res.ok) {
@@ -68,7 +73,7 @@ export async function figmaFetch(path, token, opts = {}) {
     } catch (e) {
       lastError = e;
       if (e.name === "AbortError") {
-        throw new Error(`Figma API 超时（${timeout / 1000}s），请检查网络或配置 HTTP_PROXY。`);
+        throw new Error(`Figma API timed out (${timeout / 1000}s); check your network or configure HTTP_PROXY.`);
       }
       if (attempt < MAX_RETRIES && e.message.includes("429")) {
         continue;
@@ -80,72 +85,103 @@ export async function figmaFetch(path, token, opts = {}) {
 }
 
 /**
- * HTTP_PROXY 模式：用 Node 内置 https + http 模块发出请求
+ * HTTP(S)_PROXY mode: the Figma API is HTTPS, so we must open a CONNECT tunnel and
+ * run TLS over it. Uses the canonical Node pattern of http (CONNECT) + https (over the
+ * tunneled socket), keeping zero external dependencies.
  */
-function legacyFetchWithProxy(url, token, timeout, proxyUrl) {
+function fetchViaProxy(url, token, timeout, proxyUrl) {
   return new Promise((resolve, reject) => {
-    const { protocol, hostname, port, pathname } = new URL(url);
-    const urlObj = new URL(proxyUrl);
-    if (urlObj.protocol !== "http:") {
-      reject(new Error("HTTP_PROXY 仅支持 http:// 协议的代理地址"));
+    let proxy;
+    try {
+      proxy = new URL(proxyUrl);
+    } catch {
+      reject(new Error(`Invalid HTTP_PROXY format: ${proxyUrl}`));
       return;
     }
+    const target = new URL(url);
 
-    const http = __non_webpack_require__("http");
-    const req = http.request({
-      hostname: urlObj.hostname,
-      port: urlObj.port || 80,
-      path: url,
-      method: "GET",
-      headers: { "X-Figma-Token": token, "Content-Type": "application/json" },
+    const headers = {};
+    if (proxy.username) {
+      const auth = Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64");
+      headers["Proxy-Authorization"] = `Basic ${auth}`;
+    }
+
+    const connectReq = http.request({
+      host: proxy.hostname,
+      port: proxy.port || 80,
+      method: "CONNECT",
+      path: `${target.hostname}:443`,
+      headers,
       timeout,
-    }, (res) => {
-      let body = "";
-      res.on("data", chunk => body += chunk);
-      res.on("end", () => {
-        if (res.statusCode === 429) {
-          const retryAfter = parseInt(res.headers["retry-after"]) || 5;
-          reject(new Error(`Figma API 429 速率限制，请 ${retryAfter}s 后重试。`));
-          return;
-        }
-        if (!res.statusCode || res.statusCode >= 400) {
-          reject(new Error(`Figma API ${res.statusCode}: ${body.slice(0, 200)}`));
-          return;
-        }
-        try { resolve(JSON.parse(body)); }
-        catch { reject(new Error(`Figma API 返回非 JSON: ${body.slice(0, 200)}`)); }
-      });
     });
-    req.on("timeout", () => { req.destroy(); reject(new Error(`Figma API 超时（${timeout / 1000}s）。`)); });
-    req.on("error", (e) => reject(new Error(`Figma API 网络错误：${e.message}（如在国内请配置 HTTP_PROXY）。`)));
-    req.end();
+
+    connectReq.on("connect", (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        reject(new Error(`Proxy CONNECT failed: ${res.statusCode} (check whether HTTP_PROXY is reachable).`));
+        return;
+      }
+      // Issue the HTTPS request over the tunneled socket; agent:false + socket lets
+      // https complete the TLS handshake on that socket itself.
+      const proxied = https.request(
+        {
+          host: target.hostname,
+          path: target.pathname + target.search,
+          method: "GET",
+          headers: { "X-Figma-Token": token, "Content-Type": "application/json" },
+          socket,
+          agent: false,
+          timeout,
+        },
+        (r) => {
+          let body = "";
+          r.on("data", (c) => (body += c));
+          r.on("end", () => {
+            if (r.statusCode === 429) {
+              const retryAfter = parseInt(r.headers["retry-after"]) || 5;
+              reject(new Error(`Figma API 429 rate limited; please retry in ${retryAfter}s.`));
+              return;
+            }
+            if (!r.statusCode || r.statusCode >= 400) {
+              reject(new Error(`Figma API ${r.statusCode}: ${body.slice(0, 200)}`));
+              return;
+            }
+            try { resolve(JSON.parse(body)); }
+            catch { reject(new Error(`Figma API returned non-JSON: ${body.slice(0, 200)}`)); }
+          });
+        }
+      );
+      proxied.on("timeout", () => { proxied.destroy(); reject(new Error(`Figma API timed out (${timeout / 1000}s).`)); });
+      proxied.on("error", (e) => reject(new Error(`Figma API (proxy) network error: ${e.message}`)));
+      proxied.end();
+    });
+
+    connectReq.on("timeout", () => { connectReq.destroy(); reject(new Error(`Proxy connection timed out (${timeout / 1000}s).`)); });
+    connectReq.on("error", (e) => reject(new Error(`Proxy connection error: ${e.message} (in mainland China, verify HTTP_PROXY is reachable).`)));
+    connectReq.end();
   });
 }
 
-// 被 legacyFetchWithProxy 的 eval 覆盖用，实际就是 require
-function __non_webpack_require__(mod) {
-  return require(mod);
-}
-
 /**
- * GET /v2/files/:key → 获取文件元数据
+ * GET /v1/files/:key -> fetch file metadata.
  */
 export async function getFile(fileKey, token) {
-  return figmaFetch(`/v2/files/${fileKey}`, token);
+  return figmaFetch(`/v1/files/${fileKey}`, token);
 }
 
 /**
- * GET /v2/files/:key/nodes?ids=:nodeId → 获取节点详情（核心）
+ * GET /v1/files/:key/nodes?ids=:nodeId -> fetch node details (core).
  */
 export async function getNode(fileKey, nodeId, token) {
   const encodedId = encodeURIComponent(nodeId);
-  return figmaFetch(`/v2/files/${fileKey}/nodes?ids=${encodedId}`, token);
+  return figmaFetch(`/v1/files/${fileKey}/nodes?ids=${encodedId}`, token);
 }
 
 /**
- * GET /v2/files/:key/images?ids=:nodeId&format=png → 获取节点截图
+ * GET /v1/images/:key?ids=:nodeId&format=png -> fetch node screenshot.
+ * Note: images is a separate top-level endpoint, NOT under /files/.
  */
 export function getImages(fileKey, nodeId, token, format = "png") {
   const encodedId = encodeURIComponent(nodeId);
-  return figmaFetch(`/v2/files/${fileKey}/images?ids=${encodedId}&format=${format}`, token);
+  return figmaFetch(`/v1/images/${fileKey}?ids=${encodedId}&format=${format}`, token);
 }

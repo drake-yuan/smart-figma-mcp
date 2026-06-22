@@ -1,18 +1,21 @@
-// license.js — 离线 Ed25519 license 验签（v2）
-// 物理目标：30 天才联网续期一次，平时调用全程零网络，根治 stdio 跨海超时假死。
+// license.js — offline Ed25519 license verification (v2)
+// Goal: phone home at most once every 30 days; everyday calls are fully offline,
+// which eliminates cross-border stdio timeouts.
 //
-// license token 格式： base64url(payloadJSON) + "." + base64url(signature)
-// 客户端内置 PUBLIC_KEY 本地验签，私钥只在你的发证服务器(tools/issue-license.js)。
+// License token format: base64url(payloadJSON) + "." + base64url(signature)
+// The client embeds only PUBLIC_KEY for local verification; the private key lives
+// solely on your issuing server (tools/issue-license.js).
 //
-// v2 新增：CRL 吊销列表检查、续期提醒、token 版本号
+// v2 additions: CRL revocation-list check, renewal reminder, token version field.
 
 import crypto from "node:crypto";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 
-// ⚠️ 演示用公钥。真实场景：跑 `npm run keygen` 生成你自己的密钥对，
-//   把这里替换成你的公钥(PEM)，私钥严密保管在发证服务器。
+// ⚠️ Demo public key. In production: run `npm run keygen` to generate your own key
+//    pair, replace this with your public key (PEM), and keep the private key secret
+//    on the issuing server.
 export const DEMO_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA6m1Q0Yc1y3yJ3y0Zr0Hq1xq0Q1mGq2Qe1xq0Q1mGq2=
 -----END PUBLIC KEY-----`;
@@ -29,7 +32,7 @@ export function b64urlEncode(buf) {
     .replace(/=+$/, "");
 }
 
-// ━━━ CRL 吊销列表 ━━━
+// ━━━ CRL (certificate revocation list) ━━━
 const CRL_PATH = path.join(os.homedir(), ".smart-figma", "crl.json");
 const CRL_REFRESH_DAYS = 30;
 
@@ -41,7 +44,7 @@ function loadCRL() {
   }
 }
 
-/** 检查 jti 是否在吊销列表中 */
+/** Check whether a jti is present in the revocation list. */
 function isRevoked(jti) {
   if (!jti) return false;
   const crl = loadCRL();
@@ -50,10 +53,10 @@ function isRevoked(jti) {
 }
 
 /**
- * 离线验签 license。全程零网络。
- * @param {string} token  license token
- * @param {string} publicKeyPem  内置公钥
- * @param {string} deviceFingerprint  当前机器指纹
+ * Verify a license offline. Fully network-free.
+ * @param {string} token             license token
+ * @param {string} publicKeyPem      embedded public key
+ * @param {string} deviceFingerprint current machine fingerprint
  * @returns {{ok:boolean, reason?:string, payload?:object, renewal?:object}}
  */
 export function verifyLicenseOffline(token, publicKeyPem, deviceFingerprint) {
@@ -71,7 +74,7 @@ export function verifyLicenseOffline(token, publicKeyPem, deviceFingerprint) {
     return { ok: false, reason: "decode_failed" };
   }
 
-  // 1) 验签：被篡改的 payload 会直接失败
+  // 1) Signature check: a tampered payload fails here.
   let publicKey;
   try {
     publicKey = crypto.createPublicKey(publicKeyPem);
@@ -81,17 +84,17 @@ export function verifyLicenseOffline(token, publicKeyPem, deviceFingerprint) {
   const signatureValid = crypto.verify(null, payloadBuf, publicKey, sigBuf);
   if (!signatureValid) return { ok: false, reason: "invalid_signature" };
 
-  // 2) CRL 吊销检查
+  // 2) Revocation check.
   if (payload.jti && isRevoked(payload.jti)) {
     return { ok: false, reason: "revoked", payload };
   }
 
-  // 3) 过期检查
+  // 3) Expiry check.
   if (typeof payload.exp !== "number" || Date.now() > payload.exp) {
     return { ok: false, reason: "expired", payload };
   }
 
-  // 3b) 续期提醒：过期前 7 天
+  // 3b) Renewal reminder: within 7 days of expiry.
   let renewal;
   if (payload.exp) {
     const daysLeft = Math.ceil((payload.exp - Date.now()) / (24 * 3600 * 1000));
@@ -100,7 +103,7 @@ export function verifyLicenseOffline(token, publicKeyPem, deviceFingerprint) {
     }
   }
 
-  // 4) 设备绑定（≤2 台，防止一个 license 全公司共用）
+  // 4) Device binding (<= 2 devices, prevents one license being shared company-wide).
   const devices = Array.isArray(payload.devices) ? payload.devices : [];
   if (devices.length > 0 && !devices.includes(deviceFingerprint)) {
     return { ok: false, reason: "device_unbound", payload };
@@ -110,8 +113,9 @@ export function verifyLicenseOffline(token, publicKeyPem, deviceFingerprint) {
 }
 
 /**
- * 设备指纹：机器级稳定标识(去敏感化哈希)。
- * 真实实现可叠加 MAC/主板序列号；此处用 hostname+platform+cpu 做演示。
+ * Device fingerprint: a stable machine-level identifier (de-identified hash).
+ * A production build could fold in MAC / mainboard serial; here we use
+ * hostname + platform + cpu for demonstration.
  */
 export function deviceFingerprint() {
   return crypto

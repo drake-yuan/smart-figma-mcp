@@ -1,21 +1,21 @@
-// compiler.js — 确定性几何编译器 v0.3.0
+// compiler.js — deterministic geometry compiler (v0.3.0)
 //
-// 三层策略：
-//   PURE_DIGITAL  — 规范 Auto Layout → 纯数学编译，零 LLM、零 token
-//   SEMANTIC      — 坐标流自由布局 → 栅格推断 → 输出结构化骨架 + LLM 装配
-//   VISUAL        — 极度复杂 → 建议源头治理（figma_auto_layoutify），实在不行才截图降级
+// Three-tier strategy:
+//   PURE_DIGITAL  — clean Auto Layout -> pure math compile, no LLM, no tokens
+//   SEMANTIC      — free-form coordinate flow -> grid inference -> structured skeleton + LLM assembly
+//   VISUAL        — extremely complex -> suggest source-side fix (figma_auto_layoutify), screenshot fallback as last resort
 //
-// 新增 v0.3.0：
-//   - compileCoordinateFlow() 坐标流栅格推断
-//   - compileRecursive() 递归子树编译（深度限制 6）
-//   - formatOutput() 多输出格式（tailwind/css-modules/scss/styled-components）
-//   - detectResponsiveBreakpoints() 响应式断点感知
-//   - visualizeComplexity() 人可读复杂度报告
+// v0.3.0 additions:
+//   - compileCoordinateFlow() coordinate-flow grid inference
+//   - compileRecursive() recursive subtree compile (max depth 6)
+//   - formatOutput() multiple output formats (tailwind/css-modules/scss/styled-components)
+//   - detectResponsiveBreakpoints() responsive breakpoint awareness
+//   - visualizeComplexity() human-readable complexity report
 
-const STEP = 4; // Tailwind 4px 步长
-const MAX_DEPTH = 6; // 递归最大深度
+const STEP = 4; // Tailwind 4px step
+const MAX_DEPTH = 6; // maximum recursion depth
 
-// ─── 工具函数 ───
+// ─── Utilities ───
 
 function px2step(v) {
   if (!v && v !== 0) return null;
@@ -26,7 +26,7 @@ function camelCase(str) {
   return str.replace(/[-: ]+(.)/g, (_, c) => c.toUpperCase());
 }
 
-// 众数计算
+// Statistical mode.
 function mode(arr) {
   if (!arr.length) return 0;
   const freq = new Map();
@@ -41,7 +41,7 @@ function mode(arr) {
   return best;
 }
 
-// ─── A 级策略：规范 Auto Layout → Tailwind ───
+// ─── Tier A: clean Auto Layout -> Tailwind ───
 
 export function compileAutoLayout(node) {
   const cls = [];
@@ -68,7 +68,7 @@ export function compileAutoLayout(node) {
   if (node.counterAxisAlignItems === "END") cls.push("items-end");
   if (node.layoutWrap === "WRAP") cls.push("flex-wrap");
 
-  // 尺寸约束
+  // Size constraints.
   if (node.width && !node.layoutMode) {
     const w = px2step(node.width);
     if (w != null && w > 0) cls.push(`w-${Math.min(w, 96)}`);
@@ -81,16 +81,17 @@ export function compileAutoLayout(node) {
   return cls.join(" ");
 }
 
-// 兼容旧 API
+// Backward-compatible alias.
 export const compileFigmaLayout = compileAutoLayout;
 
-// ─── B 级策略：坐标流自由布局 → 空间栅格推断 ───
+// ─── Tier B: free-form coordinate flow -> spatial grid inference ───
 
 /**
- * 当节点无 Auto Layout 时，对直接子节点做坐标聚类，推断隐式行列布局
+ * When a node has no Auto Layout, cluster its direct children's coordinates to
+ * infer an implicit row/column layout.
  *
- * @param {Object} node - Figma 节点（含 children 及坐标）
- * @param {Object} parentBox - 父节点边界 { x, y, width, height }（可选，默认用 node 自身）
+ * @param {Object} node - Figma node (with children and coordinates)
+ * @param {Object} parentBox - parent bounds { x, y, width, height } (optional, defaults to the node itself)
  * @returns {Object} { strategy: "COORDINATE_FLOW", grid: {...}, tailwind: "..." }
  */
 export function compileCoordinateFlow(node, parentBox) {
@@ -99,12 +100,12 @@ export function compileCoordinateFlow(node, parentBox) {
   ) : [];
 
   if (children.length === 0) {
-    return { strategy: "COORDINATE_FLOW", grid: null, tailwind: "", reason: "无有效子节点" };
+    return { strategy: "COORDINATE_FLOW", grid: null, tailwind: "", reason: "no valid children" };
   }
 
   const box = parentBox || { x: node.x || 0, y: node.y || 0 };
 
-  // 1. 相对化坐标
+  // 1. Relativize coordinates.
   const rel = children.map(c => ({
     ...c,
     relX: Math.round((c.x || 0) - box.x),
@@ -113,28 +114,28 @@ export function compileCoordinateFlow(node, parentBox) {
     h: Math.round(c.height || 0),
   }));
 
-  // 2. 判断主轴方向：通过 X/Y 方差判断是水平排列还是垂直排列
+  // 2. Determine the main axis from X/Y variance (horizontal vs vertical arrangement).
   const xVals = rel.map(c => c.relX);
   const yVals = rel.map(c => c.relY);
   const xVariance = variance(xVals);
   const yVariance = variance(yVals);
 
-  // 如果 X 方差远大于 Y 方差 → 水平排列；否则垂直排列
+  // X variance much larger than Y variance -> horizontal; otherwise vertical.
   const isHorizontal = xVariance > yVariance * 2;
 
-  // 3. 聚类
+  // 3. Cluster.
   const TOLERANCE = 4;
   const rows = clusterAxis(rel, isHorizontal ? "relY" : "relX", TOLERANCE);
 
-  // 4. 行内排序
+  // 4. Sort within each row.
   for (const row of rows) {
     row.children.sort((a, b) => isHorizontal ? a.relX - b.relX : a.relY - b.relY);
-    // 用最大高度/宽度作为行高/列宽
+    // Use the max height/width as the row height / column width.
     row.size = Math.max(...row.children.map(c => isHorizontal ? c.h : c.w));
     row.start = row.children[0][isHorizontal ? "relY" : "relX"];
   }
 
-  // 5. 间距推断
+  // 5. Infer spacing.
   let inferredGapAxis1 = null; // gap-x (horizontal) / gap-y (vertical)
   let inferredGapAxis2 = null; // gap-y (horizontal) / gap-x (vertical)
 
@@ -158,7 +159,7 @@ export function compileCoordinateFlow(node, parentBox) {
   }
   if (gaps2.length) inferredGapAxis2 = mode(gaps2);
 
-  // 6. 推断 padding
+  // 6. Infer padding.
   const firstChild = rel[0];
   const padTop = isHorizontal ? rows[0].start : firstChild.relY;
   const padLeft = isHorizontal ? rows[0].children[0].relX : rows[0].start;
@@ -171,20 +172,20 @@ export function compileCoordinateFlow(node, parentBox) {
     ? Math.round((box.width || (lastChild.relX + lastChild.w)) - (lastChild.relX + lastChild.w))
     : Math.round((box.width || (lastRow.start + lastRow.size)) - (lastRow.start + lastRow.size));
 
-  // 7. 生成 Tailwind
+  // 7. Generate Tailwind.
   const tw = [];
-  tw.push("flex", isHorizontal ? "flex-col" : "flex-row"); // 注意：主聚类轴 → 反方向是 flex 方向
+  tw.push("flex", isHorizontal ? "flex-col" : "flex-row"); // note: clustering axis -> flex direction is the opposite
   if (isHorizontal) {
-    // 每行是水平排列子元素 → flex-row（行内），行间 flex-col
-    // 实际：clustered by Y → 每行内元素水平排列
-    tw.push("flex-col"); // 行间垂直排列
+    // Each row arranges children horizontally -> flex-row inside; rows stack with flex-col.
+    // clustered by Y -> children within a row are arranged horizontally.
+    tw.push("flex-col"); // rows stack vertically
     if (inferredGapAxis2 != null) {
       const g = px2step(inferredGapAxis2);
       if (g != null) tw.push(`gap-y-${g}`);
     }
   } else {
-    // clustered by X → 每列元素垂直排列
-    tw.push("flex-row"); // 列间水平排列
+    // clustered by X -> children within a column are arranged vertically.
+    tw.push("flex-row"); // columns stack horizontally
     if (inferredGapAxis2 != null) {
       const g = px2step(inferredGapAxis2);
       if (g != null) tw.push(`gap-x-${g}`);
@@ -218,7 +219,7 @@ export function compileCoordinateFlow(node, parentBox) {
   };
 }
 
-// ─── 聚类辅助 ───
+// ─── Clustering helpers ───
 
 function variance(arr) {
   if (arr.length < 2) return 0;
@@ -242,10 +243,11 @@ function clusterAxis(items, key, tolerance) {
   return groups;
 }
 
-// ─── 递归编译 ───
+// ─── Recursive compile ───
 
 /**
- * 递归编译整棵子树。对每个节点根据其是否有 Auto Layout 选择编译策略。
+ * Recursively compile the whole subtree. For each node, pick a compile strategy
+ * based on whether it uses Auto Layout.
  *
  * @returns {Object} { container: "...", children: [...], depthWarning: bool|null }
  */
@@ -256,7 +258,7 @@ export function compileRecursive(node, depth = 1) {
       depth,
       tailwind: null,
       strategy: "SKIPPED",
-      reason: `深度超限（>${MAX_DEPTH}），跳过深层嵌套`,
+      reason: `depth limit exceeded (>${MAX_DEPTH}); skipping deep nesting`,
     };
   }
 
@@ -278,28 +280,28 @@ export function compileRecursive(node, depth = 1) {
     result.strategy = "COORDINATE_FLOW";
     result.grid = coordFlow.grid;
   } else {
-    // 叶子节点
+    // Leaf node.
     result.tailwind = leafClasses(node);
     result.strategy = "LEAF";
   }
 
-  // 递归子节点
+  // Recurse into children.
   if (children.length > 0) {
     result.children = children.map(c => compileRecursive(c, depth + 1));
   }
 
-  // 深度警告
+  // Depth warning.
   const maxChildDepth = result.children
     ? Math.max(...result.children.map(c => c.depth || 0))
     : depth;
   if (maxChildDepth >= MAX_DEPTH) {
-    result.depthWarning = `子树最深 ${maxChildDepth} 层，部分节点已跳过`;
+    result.depthWarning = `subtree reaches ${maxChildDepth} levels; some nodes were skipped`;
   }
 
   return result;
 }
 
-// 叶子节点样式
+// Leaf-node classes.
 function leafClasses(node) {
   const cls = [];
   if (node.width) {
@@ -314,7 +316,7 @@ function leafClasses(node) {
   return cls.join(" ") || "(no layout)";
 }
 
-// ─── 多格式输出 ───
+// ─── Multi-format output ───
 
 const FORMATTERS = {
   tailwind: (cls) => `className="${cls}"`,
@@ -324,7 +326,7 @@ const FORMATTERS = {
   },
   scss: (cls) => {
     const parts = cls.split(/\s+/).filter(Boolean);
-    // 将 Tailwind 类名映射为 SCSS 嵌套属性
+    // Map Tailwind class names to SCSS nested properties.
     const props = [];
     for (const p of parts) {
       const mapped = tailwindToCss(p);
@@ -385,9 +387,9 @@ function tailwindToCss(cls) {
 }
 
 /**
- * 将编译结果按指定格式输出
+ * Output the compiled result in the requested format.
  *
- * @param {string} tailwind - 编译输出的 Tailwind 类名
+ * @param {string} tailwind - the compiled Tailwind class names
  * @param {'tailwind'|'css-modules'|'scss'|'styled-components'} format
  * @returns {string}
  */
@@ -398,14 +400,15 @@ export function formatOutput(tailwind, format = "tailwind") {
 
 export const FORMAT_LIST = Object.keys(FORMATTERS);
 
-// ─── 响应式断点感知 ───
+// ─── Responsive breakpoint awareness ───
 
 /**
- * 检测兄弟 frame 中的响应式断点
- * 约定：同层级的 frame 如果 name 含 Desktop/Tablet/Mobile 关键字 → 视为同一组件的响应式变体
+ * Detect responsive breakpoints among sibling frames.
+ * Convention: sibling frames whose names contain Desktop/Tablet/Mobile keywords are
+ * treated as responsive variants of the same component.
  *
- * @param {Object[]} siblings - 兄弟节点列表
- * @returns {Object|null} { breakpoints: { desktop: node, tablet: node, mobile: node }, matched: true }
+ * @param {Object[]} siblings - list of sibling nodes
+ * @returns {Object|null} { breakpoints: { desktop, tablet, mobile }, matched: true }
  */
 export function detectResponsiveBreakpoints(siblings) {
   if (!Array.isArray(siblings) || siblings.length < 2) return null;
@@ -430,7 +433,7 @@ export function detectResponsiveBreakpoints(siblings) {
   const found = Object.keys(matched);
   if (found.length < 2) return null;
 
-  // 生成 Tailwind 响应式前缀建议
+  // Suggest Tailwind responsive prefixes.
   const prefixMap = { desktop: "", tablet: "md:", mobile: "sm:" };
 
   return {
@@ -444,58 +447,58 @@ export function detectResponsiveBreakpoints(siblings) {
   };
 }
 
-// ─── 复杂度评分可视化 ───
+// ─── Complexity score visualization ───
 
 /**
- * 生成人可读的复杂度评分报告
+ * Produce a human-readable complexity report.
  */
 export function visualizeComplexity(analysis) {
   const { level, strategy, score, hasAutoLayout, depth, absChildren, coordFlowChildren } = analysis;
 
-  // 评分条: 0-30 green, 30-70 yellow, 70-100 red
+  // Score bar: 0-30 green, 30-70 yellow, 70-100 red.
   const barLength = 20;
   const filled = Math.min(Math.round(score * barLength / 100), barLength);
   const bar = "█".repeat(Math.max(filled, 1)) + "░".repeat(Math.max(barLength - filled, 0));
 
   const levelIcon = { SIMPLE: "🟢", MODERATE: "🟡", COMPLEX: "🔴" }[level] || "⚪";
   const strategyDesc = {
-    PURE_DIGITAL: "纯数字编译（零 Token）",
-    SEMANTIC: "坐标流推断 + LLM 语义装配",
-    VISUAL: "极度复杂 — 建议源头治理（figma_auto_layoutify）",
+    PURE_DIGITAL: "pure-digital compile (zero tokens)",
+    SEMANTIC: "coordinate-flow inference + LLM semantic assembly",
+    VISUAL: "very complex — suggest source-side fix (figma_auto_layoutify)",
   }[strategy] || strategy;
 
-  const viewAbs = absChildren > 0 ? ` | 绝对定位=${absChildren}个` : "";
-  const viewCoord = coordFlowChildren > 0 ? ` | 坐标流子节点=${coordFlowChildren}个` : "";
+  const viewAbs = absChildren > 0 ? ` | absolute-positioned=${absChildren}` : "";
+  const viewCoord = coordFlowChildren > 0 ? ` | coordinate-flow children=${coordFlowChildren}` : "";
   return [
-    `${levelIcon} 复杂度：${level}（${score}/100）`,
+    `${levelIcon} Complexity: ${level} (${score}/100)`,
     `  [${bar}]`,
-    `  策略：${strategy} → ${strategyDesc}`,
-    `  详情：Auto Layout=${hasAutoLayout ? "✅" : "❌"} | 深度=${depth}层${viewAbs}${viewCoord}`,
+    `  Strategy: ${strategy} -> ${strategyDesc}`,
+    `  Details: Auto Layout=${hasAutoLayout ? "✅" : "❌"} | depth=${depth} levels${viewAbs}${viewCoord}`,
   ].join("\n");
 }
 
-// ─── 兼容旧版 analyzeComplexity ───
+// ─── analyzeComplexity (backward compatible) ───
 
 export function analyzeComplexity(node) {
   const hasAutoLayout = !!node.layoutMode;
   const children = Array.isArray(node.children) ? node.children : [];
-  // 绝对定位子节点：仅当显式标记 layoutPositioning="ABSOLUTE" 时才算
-  // 没有 Auto Layout 但有 x/y 坐标的子节点由坐标流编译处理，不算"绝对定位"
+  // Absolute-positioned children: counted only when explicitly tagged layoutPositioning="ABSOLUTE".
+  // Children with x/y but no Auto Layout are handled by the coordinate-flow compiler, not counted as "absolute".
   const absChildren = children.filter(
     (c) => c.layoutPositioning === "ABSOLUTE"
   ).length;
-  // 没有 Auto Layout 但有坐标的子节点数（走坐标流编译）
+  // Number of children with coordinates but no Auto Layout (handled by coordinate-flow compile).
   const coordFlowChildren = !hasAutoLayout
     ? children.filter((c) => c.x != null && c.y != null).length
     : 0;
   const depth = countDepth(node);
 
   let score = 0;
-  if (!hasAutoLayout) score += 30; // 基础罚分（无 Auto Layout）
-  if (absChildren > 0) score += absChildren * 15; // 真正的绝对定位很贵
-  // 坐标流子节点：每个 5 分，超过 10 个额外 +20
+  if (!hasAutoLayout) score += 30; // base penalty (no Auto Layout)
+  if (absChildren > 0) score += absChildren * 15; // true absolute positioning is expensive
+  // Coordinate-flow children: 5 points each, +20 extra beyond 10.
   if (coordFlowChildren > 0) {
-    score += Math.min(coordFlowChildren * 5, 50); // 最多 50
+    score += Math.min(coordFlowChildren * 5, 50); // capped at 50
     if (coordFlowChildren > 10) score += 20;
   }
   if (depth > 4) score += (depth - 4) * 8;

@@ -1,14 +1,15 @@
-// daemon-client.js — MCP 主进程连接到 Daemon 的 IPC 客户端 v0.4.0
+// daemon-client.js — IPC client that connects the MCP main process to the daemon (v0.4.0)
 //
-// 通过 Unix Domain Socket 与 daemon 进程通信。
-// 如果 daemon 不可达 → 自动降级为 DIRECT 模式（功能不受影响，体验降级）。
+// Communicates with the daemon process over a Unix domain socket.
+// If the daemon is unreachable, it automatically degrades to DIRECT mode
+// (functionality is unaffected; only the experience degrades).
 //
 // API:
-//   connectDaemon()  → 尝试连接，返回 client
-//   client.prefetch(figmaUrl, token) → 预拉取 + 缓存
-//   client.compileWithCache(params)  → 编译（优先走缓存）
-//   client.cacheStats() → 缓存命中统计
-//   client.shutdown()   → 通知 daemon 退出
+//   connectDaemon()  -> attempt connection, returns a client
+//   client.prefetch(figmaUrl, token) -> prefetch + cache
+//   client.compileWithCache(params)  -> compile (cache-first)
+//   client.cacheStats() -> cache hit statistics
+//   client.shutdown()   -> tell the daemon to exit
 
 import net from "node:net";
 import path from "node:path";
@@ -16,7 +17,7 @@ import os from "node:os";
 import { CacheManager } from "./cache.js";
 
 const SOCKET_PATH = path.join(os.homedir(), ".smart-figma", "daemon.sock");
-const CONNECT_TIMEOUT = 500; // ms，超时则降级
+const CONNECT_TIMEOUT = 500; // ms; degrade on timeout
 
 export class DaemonClient {
   constructor() {
@@ -26,10 +27,10 @@ export class DaemonClient {
     this.idCounter = 0;
     this.buf = "";
     /** @type {CacheManager|null} */
-    this.fallbackCache = null; // DIRECT 模式下的小型 L1 缓存
+    this.fallbackCache = null; // small L1 cache used in DIRECT mode
   }
 
-  // ── 连接 ──
+  // ── Connection ──
 
   async connect(socketPath = SOCKET_PATH) {
     return new Promise((resolve) => {
@@ -40,7 +41,7 @@ export class DaemonClient {
         this.socket.destroy();
         this.socket = null;
         this.mode = "DIRECT";
-        // 降级模式下初始化小型内存缓存
+        // Initialize a small in-memory cache in degraded mode.
         if (!this.fallbackCache) this.fallbackCache = new CacheManager();
         resolve(false);
       };
@@ -86,7 +87,7 @@ export class DaemonClient {
     }
   }
 
-  // ── 请求 ──
+  // ── Requests ──
 
   _request(method, params, timeout = 10000) {
     const id = ++this.idCounter;
@@ -119,20 +120,20 @@ export class DaemonClient {
   // ── API ──
 
   /**
-   * 预拉取 Figma URL → daemon 后台加载 + 缓存
+   * Prefetch a Figma URL -> daemon loads + caches it in the background.
    */
   async prefetch(figmaUrl, token) {
     return this._tryRequest("prefetch", { figmaUrl, token });
   }
 
   /**
-   * 尝试从缓存获取编译结果
-   * @returns {Object|null} 缓存命中时返回结果，否则 null
+   * Try to read a compiled result from the cache.
+   * @returns {Object|null} the result on a cache hit, otherwise null
    */
   async getCached(nodeId, contentHash, mode, styleFormat) {
     const result = await this._tryRequest("cache_get", { nodeId, contentHash, mode, styleFormat });
     if (result) return result;
-    // 降级模式备选
+    // Degraded-mode fallback.
     if (this.fallbackCache) {
       return this.fallbackCache.get(nodeId, contentHash, mode, styleFormat);
     }
@@ -140,18 +141,18 @@ export class DaemonClient {
   }
 
   /**
-   * 缓存编译结果
+   * Cache a compiled result.
    */
   async setCache(nodeId, contentHash, mode, styleFormat, value) {
     await this._tryRequest("cache_set", { nodeId, contentHash, mode, styleFormat, value });
-    // 降级模式备选
+    // Degraded-mode fallback.
     if (this.fallbackCache) {
       this.fallbackCache.set(nodeId, contentHash, mode, styleFormat, value);
     }
   }
 
   /**
-   * 缓存统计
+   * Cache statistics.
    */
   async cacheStats() {
     const stats = await this._tryRequest("cache_stats");
@@ -161,7 +162,7 @@ export class DaemonClient {
   }
 
   /**
-   * 清除所有缓存
+   * Clear all caches.
    */
   async cacheClear() {
     await this._tryRequest("cache_clear");
@@ -169,7 +170,7 @@ export class DaemonClient {
   }
 
   /**
-   * 通知 daemon 退出
+   * Tell the daemon to exit.
    */
   async shutdown() {
     await this._tryRequest("shutdown");
@@ -185,7 +186,7 @@ export class DaemonClient {
   }
 }
 
-// 全局单例
+// Global singleton.
 let _client = null;
 export function getDaemonClient() {
   if (!_client) _client = new DaemonClient();

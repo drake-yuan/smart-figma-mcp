@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// daemon.js — Smart Figma 常驻守护进程 v0.4.0
+// daemon.js — Smart Figma resident daemon (v0.4.0)
 //
-// 通过 Unix Domain Socket 与 MCP server 通信，提供：
-//   1. 多级缓存（L1 内存 + L2 磁盘） — 消除重复 Figma API 调用
-//   2. 静默预解析预热 — 用户粘贴 URL 时后台拉取整棵图层树
-//   3. 编译缓存 — 相同节点二次编译 < 10ms 返回
+// Communicates with the MCP server over a Unix domain socket, providing:
+//   1. multi-level cache (L1 memory + L2 disk) — eliminates duplicate Figma API calls
+//   2. silent prefetch/warm-up — pulls the whole layer tree in the background when a URL is pasted
+//   3. compile cache — a repeated node compiles and returns in < 10ms
 //
-// 生命周期：
-//   - 主进程启动时 spawn daemon
-//   - daemon 空闲 30 分钟后自动退出
-//   - 主进程退出时发送 shutdown 通知
+// Lifecycle:
+//   - the main process spawns the daemon at startup
+//   - the daemon auto-exits after 30 minutes idle
+//   - the main process sends a shutdown notification on exit
 
 import net from "node:net";
 import fs from "node:fs";
@@ -20,15 +20,15 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SOCKET_PATH = path.join(os.homedir(), ".smart-figma", "daemon.sock");
-const IDLE_TIMEOUT = 30 * 60000; // 30 分钟
+const IDLE_TIMEOUT = 30 * 60000; // 30 minutes
 
 const cache = new CacheManager();
 
-// ─── 日志 ───
+// ─── Logging ───
 function log(...a) { process.stderr.write(`[smart-figma][daemon] ${a.join(" ")}\n`); }
 
-// ─── 预拉取管理器 ───
-const prefetchState = new Map(); // fileKey → { status, progress }
+// ─── Prefetch manager ───
+const prefetchState = new Map(); // fileKey -> { status, progress }
 
 async function handlePrefetch(params) {
   const { figmaUrl, token } = params;
@@ -42,21 +42,21 @@ async function handlePrefetch(params) {
 
     log(`prefetch: ${fileKey} (${nodeId})`);
 
-    // 动态导入 Figma client（daemon 进程中运行）
+    // Dynamically import the Figma client (runs inside the daemon process).
     const { getNode, getFile } = await import("./figma-client.js");
     const { normalizeNode } = await import("./figma-normalizer.js");
 
-    // 先拉文件元数据
+    // Fetch file metadata first.
     const fileMeta = await getFile(fileKey, token);
     prefetchState.set(fileKey, { status: "fetching", progress: 30 });
 
-    // 再拉具体节点
+    // Then fetch the specific node.
     const raw = await getNode(fileKey, nodeId, token);
     prefetchState.set(fileKey, { status: "fetching", progress: 80 });
 
     const normalized = normalizeNode(raw);
 
-    // 缓存原始 Figma 响应
+    // Cache the raw Figma response.
     cache.set("figma_raw", `${fileKey}:${nodeId}`, "prefetch", "raw", {
       normalized,
       fileMeta: { name: fileMeta?.name, lastModified: fileMeta?.lastModified },
@@ -74,14 +74,14 @@ async function handlePrefetch(params) {
 
 function parseFigmaUrl(url) {
   const fileMatch = url.match(/\/(?:design|file)\/([a-zA-Z0-9]+)/);
-  if (!fileMatch) throw new Error("无法从 URL 提取 fileKey");
+  if (!fileMatch) throw new Error("Could not extract fileKey from URL");
   const fileKey = fileMatch[1];
   const nodeMatch = url.match(/node-id=([^&]+)/);
   const nodeId = nodeMatch ? nodeMatch[1].replace(/-/g, ":") : null;
   return { fileKey, nodeId };
 }
 
-// ─── IPC 消息处理 ───
+// ─── IPC message handling ───
 
 async function dispatch(method, params) {
   switch (method) {
@@ -112,7 +112,7 @@ async function dispatch(method, params) {
       return { progress: prefetchState.get(params.fileKey) || null };
 
     case "shutdown":
-      log("收到 shutdown 指令，正在退出...");
+      log("Received shutdown command, exiting...");
       return { ok: true };
 
     default:
@@ -120,7 +120,7 @@ async function dispatch(method, params) {
   }
 }
 
-// ─── Socket 服务器 ───
+// ─── Socket server ───
 
 let server;
 let idleTimer;
@@ -128,7 +128,7 @@ let idleTimer;
 function resetIdleTimer() {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    log("空闲超时，自动退出");
+    log("Idle timeout reached, exiting automatically");
     shutdown();
   }, IDLE_TIMEOUT);
 }
@@ -137,12 +137,12 @@ function shutdown() {
   if (idleTimer) clearTimeout(idleTimer);
   try { server.close(); } catch {}
   try { fs.unlinkSync(SOCKET_PATH); } catch {}
-  log("daemon 已关闭");
+  log("daemon stopped");
   process.exit(0);
 }
 
 export function startDaemon(portPath = SOCKET_PATH) {
-  // 清理旧 socket 文件
+  // Remove a stale socket file.
   try { fs.unlinkSync(portPath); } catch {}
 
   server = net.createServer((socket) => {
@@ -187,7 +187,7 @@ export function startDaemon(portPath = SOCKET_PATH) {
   return { server, cache };
 }
 
-// 独立启动（`node src/daemon.js`）
+// Standalone launch (`node src/daemon.js`).
 if (process.argv[1] && process.argv[1].includes("daemon.js")) {
   startDaemon();
 }

@@ -11,14 +11,15 @@
     "keygen": "node tools/keygen.js",
     "issue": "node tools/issue-license.js",
     "test": "node test/smoke.mjs",
-    "prepublishOnly": "node test/smoke.mjs 2>&1 | grep -q '烟囱测试全部通过'"
+    "prepublishOnly": "node test/smoke.mjs 2>&1 | grep -q 'All smoke tests passed'"
   },
   "files": [
     "src/",
     "bin/",
     "keys/public.pem",
     "tools/keygen.js",
-    "tools/quota-server.js"
+    "tools/quota-server.js",
+    "LICENSE"
   ],
   "keywords": [
     "mcp",
@@ -44,6 +45,6 @@
     "url": "https://github.com/smart-figma/mcp/issues"
   },
   "author": "Smart Figma Team",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "private": false
 }

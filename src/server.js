@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// server.js — Smart Figma-to-Code MCP Server (v0.2.0 Figma API + 协议完善)
+// server.js — Smart Figma-to-Code MCP Server (v0.2.0: Figma API + protocol hardening)
 //
-// 协议：MCP = JSON-RPC 2.0 over stdio，消息按换行分隔(newline-delimited)。
-// 零外部依赖：纯 Node 实现 initialize / tools/list / tools/call / ping / health。
+// Protocol: MCP = JSON-RPC 2.0 over stdio, messages are newline-delimited.
+// Zero external dependencies: pure Node implementation of initialize / tools/list /
+// tools/call / ping / health.
 //
-// 调用门禁顺序（每次 tools/call 都跑一遍，全程本地、毫秒级）：
-//   1) 离线 license 验签(license.js)  → 失败直接拒
-//   2) BYOK 解析(byok.js)            → 自带 key 则 token 走用户账单
-//   3) 复杂度分析(compiler.js)        → 决定 PURE_DIGITAL / SEMANTIC / VISUAL
-//   4) 配额扣减(quota.js)            → 非 BYOK 时按 credits 扣，服务端权威
-//   5) 编译 + variant 映射            → 产出装配上下文
+// Gate order (run on every tools/call, fully local and sub-millisecond):
+//   1) offline license verification (license.js)  -> reject outright on failure
+//   2) BYOK resolution (byok.js)                   -> with own key, token bills the user
+//   3) complexity analysis (compiler.js)           -> choose PURE_DIGITAL / SEMANTIC / VISUAL
+//   4) quota deduction (quota.js)                  -> non-BYOK deducts credits, server-authoritative
+//   5) compile + variant mapping                   -> produce assembly context
 
 import readline from "node:readline";
 import fs from "node:fs";
@@ -26,7 +27,7 @@ import {
   visualizeComplexity,
   detectResponsiveBreakpoints,
 } from "./compiler.js";
-import { debit, CREDIT_COST, quotaStatus } from "./quota.js";
+import { debit, CREDIT_COST, quotaStatus, freeTierDebit, FREE_TIER_DAILY_LIMIT } from "./quota.js";
 import { mapToVariant, rememberMapping, lookupMapping, scanLocalComponents, checkMappingHealth, exportMappings, importMappings, loadAliases, resolveMapping } from "./mapping.js";
 import { getNode as figmaGetNode, getFile as figmaGetFile } from "./figma-client.js";
 import { normalizeNode, normalizeFileMeta } from "./figma-normalizer.js";
@@ -37,7 +38,7 @@ import { CacheManager } from "./cache.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ─── 日志分级 ───
+// ─── Leveled logging ───
 const LOG_LEVEL_MAP = { error: 0, warn: 1, info: 2, debug: 3 };
 const CURRENT_LOG_LEVEL = LOG_LEVEL_MAP[process.env.LOG_LEVEL] ?? LOG_LEVEL_MAP.info;
 function xlog(level, ...a) {
@@ -47,14 +48,14 @@ function xlog(level, ...a) {
 }
 const log = (...a) => xlog("info", ...a);
 
-// ─── 版本号：从 package.json 读取 ───
+// ─── Version: read from package.json ───
 let SERVER_VERSION = "0.0.0";
 try {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
   SERVER_VERSION = pkg.version;
-} catch { xlog("warn", "无法读取 package.json，使用默认版本号"); }
+} catch { xlog("warn", "Could not read package.json; using default version."); }
 
-// ─── 公钥加载 ───
+// ─── Public key loading ───
 function resolvePublicKey() {
   if (process.env.SMART_FIGMA_PUBLIC_KEY) return process.env.SMART_FIGMA_PUBLIC_KEY;
   try { return fs.readFileSync(path.join(__dirname, "..", "keys", "public.pem"), "utf8"); }
@@ -62,7 +63,7 @@ function resolvePublicKey() {
 }
 const PUBLIC_KEY = resolvePublicKey();
 
-// ─── 标准 JSON-RPC 错误码 ───
+// ─── Standard JSON-RPC error codes ───
 const ERROR_CODES = {
   PARSE_ERROR: -32700,
   INVALID_REQUEST: -32600,
@@ -72,10 +73,10 @@ const ERROR_CODES = {
   NOT_INITIALIZED: -32002,
 };
 
-// ─── 初始化状态机 ───
+// ─── Initialization state machine ───
 let _initialized = false;
 
-// ─── Daemon 连接 ───
+// ─── Daemon connection ───
 let daemon = null;
 let daemonProcess = null;
 
@@ -85,7 +86,7 @@ async function initDaemon() {
   if (connected) {
     xlog("info", `daemon connected (${daemon.mode} mode)`);
   } else {
-    // 尝试 spawn daemon 子进程
+    // Try to spawn the daemon child process.
     xlog("info", "daemon not running, spawning...");
     try {
       const daemonPath = path.join(__dirname, "daemon.js");
@@ -94,7 +95,7 @@ async function initDaemon() {
         detached: false,
       });
       daemonProcess.on("error", () => { daemonProcess = null; });
-      // 等 300ms 后重试连接
+      // Retry the connection after 300ms.
       await new Promise(r => setTimeout(r, 300));
       await daemon.connect();
       if (daemon.connected()) {
@@ -108,47 +109,48 @@ async function initDaemon() {
   }
 }
 
-// ─── 门禁：license + BYOK ───
+// ─── Gate: license + BYOK ───
 function gate() {
   const token = process.env.SMART_FIGMA_LICENSE || "";
   const fp = deviceFingerprint();
   const lic = verifyLicenseOffline(token, PUBLIC_KEY, fp);
   const llm = resolveLLMConfig();
-  // 续期提醒：过期前 7 天内每次调用提示
+  // Renewal reminder: warn on every call within 7 days of expiry.
   let renewal = null;
   if (lic.ok && lic.renewal) {
     renewal = lic.renewal;
-    xlog("warn", `License 还有 ${renewal.daysLeft} 天过期，请续费。`);
+    xlog("warn", `License expires in ${renewal.daysLeft} day(s); please renew.`);
   }
-  // 安全提醒：BYOK key 明文传递
+  // Security reminder: BYOK key passed in plaintext.
   const secWarn = securityWarning(llm);
   if (secWarn) xlog("warn", secWarn);
   return { lic, llm, fp, renewal };
 }
 
-// ─── 工具实现 ───
+// ─── Tool implementations ───
 async function toolCompile(args) {
   const { lic, llm } = gate();
-  if (!lic.ok) {
-    return errContent(`License 校验失败：${lic.reason}。请检查 SMART_FIGMA_LICENSE。`);
-  }
+  // No license -> do not hard-reject; degrade to the free tier (Hacker): pure-digital
+  // compile only + daily cap. This makes the tool usable right after `npm install`,
+  // which is the lifeblood of organic growth.
+  const freeTier = !lic.ok;
 
-  // 支持两种输入：离线 figmaNode JSON，或 figmaUrl + figmaToken（真联 Figma API）
+  // Two input modes: an offline figmaNode JSON, or figmaUrl + figmaToken (live Figma API).
   let node = args.figmaNode;
   if (!node && args.figmaUrl) {
     xlog("debug", "figmaUrl detected, fetching from Figma API ...");
     const token = args.figmaToken || process.env.FIGMA_ACCESS_TOKEN;
-    if (!token) return errContent("figmaUrl 模式需要 FIGMA_ACCESS_TOKEN 或传入 figmaToken。");
+    if (!token) return errContent("figmaUrl mode requires FIGMA_ACCESS_TOKEN or a figmaToken argument.");
     try {
       const { fileKey, nodeId } = parseFigmaUrl(args.figmaUrl);
       const fetched = await figmaGetNode(fileKey, nodeId, token);
-      if (!fetched) return errContent("Figma API 返回空数据。");
+      if (!fetched) return errContent("Figma API returned empty data.");
       node = normalizeNode(fetched);
     } catch (e) {
-      return errContent(`Figma API 获取失败：${e.message}`);
+      return errContent(`Figma API fetch failed: ${e.message}`);
     }
   }
-  if (!node) return errContent("缺少 figmaNode（请传入节点 JSON 或 figmaUrl）。");
+  if (!node) return errContent("Missing figmaNode (pass a node JSON or a figmaUrl).");
 
   const complexity = analyzeComplexity(node);
   const styleFormat = args.styleFormat || "tailwind";
@@ -156,29 +158,43 @@ async function toolCompile(args) {
   if (complexity.level === "COMPLEX") {
     return okContent(JSON.stringify({
       action: "SUGGEST_AUTOLAYOUT",
-      reason: "未使用 Auto Layout / 绝对定位过多，硬转会产出灾难代码",
-      message: "检测到此设计稿未使用 Auto Layout。建议在 Figma 端一键转换为 Auto Layout 后重试，" +
-        "可大幅提升还原精度（详见 figma_auto_layoutify 引导）。",
+      reason: "No Auto Layout / too much absolute positioning; a forced conversion would produce disastrous code.",
+      message: "This design does not use Auto Layout. Convert it to Auto Layout in Figma (one click) and retry " +
+        "for much higher fidelity (see the figma_auto_layoutify plugin).",
       complexity,
       complexityReport: visualizeComplexity(complexity),
     }, null, 2));
   }
 
-  const charge = await debit({
-    sub: lic.payload.sub,
-    quota: lic.payload.quota,
-    strategy: complexity.strategy,
-    byok: llm.byok,
-  });
+  const charge = freeTier
+    ? freeTierDebit(complexity.strategy)
+    : await debit({
+        sub: lic.payload.sub,
+        quota: lic.payload.quota,
+        strategy: complexity.strategy,
+        byok: llm.byok,
+      });
   if (!charge.ok) {
-    return errContent(`配额不足：${charge.reason}（本次需 ${charge.cost} credits）。`);
+    if (freeTier && charge.reason === "free_tier_pure_digital_only") {
+      return errContent(
+        `The free tier supports pure-digital compile of clean Auto Layout designs only. This design needs a higher tier (${complexity.strategy}). ` +
+        `Set SMART_FIGMA_LICENSE to unlock the Maker/Pro tiers (BYOK pays your own tokens; we take zero cut).`
+      );
+    }
+    if (freeTier && charge.reason === "free_tier_daily_exceeded") {
+      return errContent(
+        `Free tier daily limit of ${charge.limit} reached (resets next UTC day). ` +
+        `Set SMART_FIGMA_LICENSE to unlock unlimited calls + local component variant mapping.`
+      );
+    }
+    return errContent(`Quota exceeded: ${charge.reason} (this call needs ${charge.cost ?? "?"} credits).`);
   }
 
-  // 编译：根据策略选不同路径
+  // Compile: pick a path based on the strategy.
   let tailwind, coordinateFlow, recursiveTree;
   const mode = args.mode || "flat";
 
-  // ── 缓存检查（跳过配额扣减的开销）──
+  // ── Cache check (skips the quota-deduction overhead) ──
   const nodeId = node.id || node.name || "anon";
   const contentHash = daemon?.fallbackCache
     ? daemon.fallbackCache.contentHash(node)
@@ -189,19 +205,19 @@ async function toolCompile(args) {
   }
 
   if (mode === "recursive") {
-    // 递归编译整棵子树
+    // Recursively compile the whole subtree.
     recursiveTree = compileRecursive(node);
     tailwind = recursiveTree.tailwind || "";
   } else if (complexity.level === "MODERATE") {
-    // 中等复杂度：坐标流推断 + 纯数字编译
+    // Moderate complexity: coordinate-flow inference + pure-digital compile.
     coordinateFlow = compileCoordinateFlow(node);
     tailwind = coordinateFlow.tailwind;
   } else {
-    // SIMPLE：纯 Auto Layout 编译
+    // SIMPLE: pure Auto Layout compile.
     tailwind = compileFigmaLayout(node);
   }
 
-  // 响应式检测
+  // Responsive detection.
   let responsive = null;
   if (args.siblings && Array.isArray(args.siblings)) {
     responsive = detectResponsiveBreakpoints(args.siblings);
@@ -216,24 +232,27 @@ async function toolCompile(args) {
     }
   }
 
-  // 按指定格式输出
+  // Output in the requested format.
   const formattedOutput = formatOutput(tailwind, styleFormat);
 
   const assembly = buildAssemblyPrompt({ node, tailwind: formattedOutput, mapping, complexity, styleFormat });
 
-  // 续期提醒
+  // Renewal reminder.
   let renewNotice = null;
-  if (lic.payload.exp && lic.payload.exp - Date.now() < 7 * 86400000) {
+  if (!freeTier && lic.payload.exp && lic.payload.exp - Date.now() < 7 * 86400000) {
     renewNotice = {
       action: "RENEW_NEEDED",
       daysLeft: Math.ceil((lic.payload.exp - Date.now()) / 86400000),
-      message: `您的订阅将在 ${Math.ceil((lic.payload.exp - Date.now()) / 86400000)} 天后到期。`,
+      message: `Your subscription expires in ${Math.ceil((lic.payload.exp - Date.now()) / 86400000)} day(s).`,
     };
   }
 
   const result = {
-    billing: llm.byok
-      ? { mode: "BYOK", provider: llm.provider, note: "token 走用户账单，我方零变动成本" }
+    billing: freeTier
+      ? { mode: "FREE", remaining: charge.remaining, dailyLimit: charge.limit,
+          note: `Free tier: pure-digital compile only, ${charge.remaining}/${charge.limit} left today. Set SMART_FIGMA_LICENSE to unlock more.` }
+      : llm.byok
+      ? { mode: "BYOK", provider: llm.provider, note: "token bills the user; our variable cost is zero" }
       : { mode: "CREDITS", charged: charge.cost, remaining: charge.remaining },
     strategy: complexity.strategy,
     complexityReport: visualizeComplexity(complexity),
@@ -248,7 +267,7 @@ async function toolCompile(args) {
     ...(renewNotice && { renewNotice }),
   };
 
-  // ── 缓存写入 ──
+  // ── Cache write ──
   if (daemon) {
     daemon.setCache(nodeId, contentHash, mode, styleFormat, { result }).catch(() => {});
   }
@@ -258,13 +277,13 @@ async function toolCompile(args) {
 
 async function toolFetchFigma(args) {
   const { lic, llm } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
 
   const { figmaUrl, action = "node" } = args;
-  if (!figmaUrl) return errContent("缺少 figmaUrl。");
+  if (!figmaUrl) return errContent("Missing figmaUrl.");
 
   const token = args.figmaToken || process.env.FIGMA_ACCESS_TOKEN;
-  if (!token) return errContent("需要 FIGMA_ACCESS_TOKEN 环境变量。");
+  if (!token) return errContent("FIGMA_ACCESS_TOKEN environment variable is required.");
 
   try {
     const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
@@ -277,25 +296,25 @@ async function toolFetchFigma(args) {
 
     // action === "node" (default)
     const fetched = await figmaGetNode(fileKey, nodeId, token);
-    if (!fetched) return errContent(`节点 ${nodeId} 未找到。`);
+    if (!fetched) return errContent(`Node ${nodeId} not found.`);
     const normalized = normalizeNode(fetched);
     return okContent(JSON.stringify(normalized, null, 2));
   } catch (e) {
-    return errContent(`Figma API 失败：${e.message}`);
+    return errContent(`Figma API failed: ${e.message}`);
   }
 }
 
 function parseFigmaUrl(url) {
-  // 格式: https://www.figma.com/design/:fileKey/...?node-id=:nodeId
-  // 或: https://www.figma.com/file/:fileKey/...?node-id=:nodeId
+  // Format: https://www.figma.com/design/:fileKey/...?node-id=:nodeId
+  // or:     https://www.figma.com/file/:fileKey/...?node-id=:nodeId
   const fileMatch = url.match(/\/(?:design|file)\/([a-zA-Z0-9]+)/);
-  if (!fileMatch) throw new Error("无法从 URL 提取 fileKey，格式应为 https://www.figma.com/design/FILEKEY/...?node-id=NODEID");
+  if (!fileMatch) throw new Error("Could not extract fileKey from URL; expected https://www.figma.com/design/FILEKEY/...?node-id=NODEID");
   const fileKey = fileMatch[1];
 
   const nodeMatch = url.match(/node-id=([^&]+)/);
   const nodeId = nodeMatch ? nodeMatch[1].replace(/-/g, ":") : null;
 
-  if (!nodeId) throw new Error("无法从 URL 提取 node-id，链接中需要包含 ?node-id=xxx 参数");
+  if (!nodeId) throw new Error("Could not extract node-id from URL; the link must include a ?node-id=xxx parameter");
 
   return { fileKey, nodeId };
 }
@@ -305,14 +324,14 @@ function buildAssemblyPrompt({ node, tailwind, mapping, complexity, styleFormat 
     styleFormat === "css-modules" ? "CSS Modules" :
     styleFormat === "scss" ? "SCSS" : "Styled Components";
   const lines = [
-    `【几何骨架 — 禁止猜测物理数值，策略：${complexity.strategy}，输出格式：${styleLabel}】`,
-    `容器布局（${styleFormat}）：${tailwind || "(无 Auto Layout)"}`,
+    `[Geometry skeleton — do NOT guess physical values. Strategy: ${complexity.strategy}, output format: ${styleLabel}]`,
+    `Container layout (${styleFormat}): ${tailwind || "(no Auto Layout)"}`,
   ];
   if (mapping) {
     lines.push(
-      `强制复用本地组件：${mapping.component}（import from '${mapping.importPath}'）`,
-      `精确 props：${JSON.stringify(mapping.props)}（映射置信度 ${mapping.confidence}）`,
-      `⛔ 禁止重新造该组件，必须 import 复用。`
+      `Reuse the local component: ${mapping.component} (import from '${mapping.importPath}')`,
+      `Exact props: ${JSON.stringify(mapping.props)} (mapping confidence ${mapping.confidence})`,
+      `⛔ Do NOT recreate this component; you MUST import and reuse it.`
     );
   }
   return lines.join("\n");
@@ -320,11 +339,11 @@ function buildAssemblyPrompt({ node, tailwind, mapping, complexity, styleFormat 
 
 function toolSave(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
 
   const { code, componentName, projectRoot, featureDir = "components/generated" } = args;
   if (!code || !componentName || !projectRoot) {
-    return errContent("缺少 code / componentName / projectRoot。");
+    return errContent("Missing code / componentName / projectRoot.");
   }
   const cleaned = sanitizeCode(code);
   const dir = path.join(projectRoot, "src", featureDir);
@@ -333,97 +352,97 @@ function toolSave(args) {
   fs.writeFileSync(file, cleaned);
   updateBarrel(dir, componentName);
 
-  return okContent(JSON.stringify({ saved: file, exportUpdated: true, note: "已物理清洗 data-node-id 并更新 index.ts" }, null, 2));
+  return okContent(JSON.stringify({ saved: file, exportUpdated: true, note: "Stripped data-node-id and updated index.ts" }, null, 2));
 }
 
 function toolRemember(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   const { projectRoot, figmaComponentKey, figmaName, target } = args;
   if (!projectRoot || !figmaComponentKey || !target) {
-    return errContent("缺少 projectRoot / figmaComponentKey / target。");
+    return errContent("Missing projectRoot / figmaComponentKey / target.");
   }
   const count = rememberMapping(projectRoot, { figmaComponentKey, figmaName, target });
-  return okContent(`已沉淀映射资产（共 ${count} 条）。该资产绑定本工具，构成切换成本护城河。`);
+  return okContent(`Mapping asset saved (${count} total). It is bound to this tool and forms a switching-cost moat.`);
 }
 
 function toolCacheClear() {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   try {
     if (daemon) {
       return daemon.cacheClear().then((result) =>
         okContent(JSON.stringify(result || { cleared: true }, null, 2))
       );
     }
-    return okContent(JSON.stringify({ cleared: true, note: "无 daemon，无可清除缓存" }, null, 2));
+    return okContent(JSON.stringify({ cleared: true, note: "no daemon; nothing to clear" }, null, 2));
   } catch (e) {
-    return errContent(`缓存清除失败：${e.message}`);
+    return errContent(`Cache clear failed: ${e.message}`);
   }
 }
 
 function toolScanComponents(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   const { projectRoot } = args;
-  if (!projectRoot) return errContent("缺少 projectRoot 参数。");
+  if (!projectRoot) return errContent("Missing projectRoot argument.");
   try {
     loadAliases(projectRoot);
     const components = scanLocalComponents(projectRoot);
     return okContent(JSON.stringify({ components, count: components.length }, null, 2));
   } catch (e) {
-    return errContent(`组件扫描失败：${e.message}`);
+    return errContent(`Component scan failed: ${e.message}`);
   }
 }
 
 function toolMappingHealth(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   const { projectRoot } = args;
-  if (!projectRoot) return errContent("缺少 projectRoot 参数。");
+  if (!projectRoot) return errContent("Missing projectRoot argument.");
   try {
     const health = checkMappingHealth(projectRoot);
     return okContent(JSON.stringify(health, null, 2));
   } catch (e) {
-    return errContent(`映射健康检查失败：${e.message}`);
+    return errContent(`Mapping health check failed: ${e.message}`);
   }
 }
 
 function toolExportMappings(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   const { projectRoot } = args;
-  if (!projectRoot) return errContent("缺少 projectRoot 参数。");
+  if (!projectRoot) return errContent("Missing projectRoot argument.");
   try {
     const data = exportMappings(projectRoot);
     return okContent(JSON.stringify(data, null, 2));
   } catch (e) {
-    return errContent(`映射导出失败：${e.message}`);
+    return errContent(`Mapping export failed: ${e.message}`);
   }
 }
 
 function toolImportMappings(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   const { projectRoot, data } = args;
-  if (!projectRoot || !data) return errContent("缺少 projectRoot / data 参数。");
+  if (!projectRoot || !data) return errContent("Missing projectRoot / data argument.");
   try {
     const result = importMappings(projectRoot, data);
     return okContent(JSON.stringify(result, null, 2));
   } catch (e) {
-    return errContent(`映射导入失败：${e.message}`);
+    return errContent(`Mapping import failed: ${e.message}`);
   }
 }
 
 function toolRefreshCRL(args) {
   const { lic } = gate();
-  if (!lic.ok) return errContent(`License 校验失败：${lic.reason}`);
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
   const crlUrl = args.url || process.env.CRL_URL;
-  if (!crlUrl) return errContent("未配置 CRL URL。请通过 --url 或环境变量 CRL_URL 指定。");
+  if (!crlUrl) return errContent("No CRL URL configured. Provide it via --url or the CRL_URL environment variable.");
   return refreshCRL(crlUrl).then((result) =>
     okContent(JSON.stringify(result, null, 2))
   ).catch((e) =>
-    errContent(`CRL 刷新失败：${e.message}`)
+    errContent(`CRL refresh failed: ${e.message}`)
   );
 }
 
@@ -431,7 +450,7 @@ async function refreshCRL(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
-  // 格式：{ version: N, revoked: ["hash1", "hash2", ...] }
+  // Format: { version: N, revoked: ["hash1", "hash2", ...] }
   const crlPath = path.join(os.homedir(), ".smart-figma", "crl.json");
   fs.mkdirSync(path.dirname(crlPath), { recursive: true });
   fs.writeFileSync(crlPath, JSON.stringify(data, null, 2));
@@ -453,41 +472,41 @@ function updateBarrel(dir, componentName) {
   if (!content.includes(line)) fs.appendFileSync(indexPath, line);
 }
 
-// ─── MCP 工具清单 ───
+// ─── MCP tool catalog ───
 const TOOLS = [
   {
     name: "compile_figma_component",
-    description: "编译 Figma 节点为 Tailwind + variant 映射上下文。支持离线 figmaNode JSON 或 figmaUrl（真联 Figma API）。BYOK 模式 token 走用户账单。",
+    description: "Compile a Figma node into a Tailwind + variant-mapping context. Accepts an offline figmaNode JSON or a figmaUrl (live Figma API). In BYOK mode the token bills the user.",
     inputSchema: {
       type: "object",
       properties: {
-        figmaNode: { type: "object", description: "Figma 导出的节点 JSON（离线传入，与 figmaUrl 二选一）" },
-        figmaUrl: { type: "string", description: "Figma 设计稿链接（https://www.figma.com/design/FILEKEY/...?node-id=NODEID，与 figmaNode 二选一）" },
-        figmaToken: { type: "string", description: "Figma Personal Access Token（优先级高于环境变量 FIGMA_ACCESS_TOKEN）" },
-        projectRoot: { type: "string", description: "用户项目根目录" },
-        localComponent: { type: "object", description: "本地组件元信息(name/importPath/variants)" },
-        styleFormat: { type: "string", enum: FORMAT_LIST, description: "输出样式格式：tailwind/css-modules/scss/styled-components（默认 tailwind）" },
-        mode: { type: "string", enum: ["flat", "recursive"], description: "编译模式：flat 仅编译外层容器，recursive 递归编译整棵子树（默认 flat）" },
-        siblings: { type: "array", description: "兄弟节点列表，用于检测响应式断点" },
+        figmaNode: { type: "object", description: "Figma node JSON exported offline (use either this or figmaUrl)" },
+        figmaUrl: { type: "string", description: "Figma design link (https://www.figma.com/design/FILEKEY/...?node-id=NODEID; use either this or figmaNode)" },
+        figmaToken: { type: "string", description: "Figma Personal Access Token (takes precedence over the FIGMA_ACCESS_TOKEN env var)" },
+        projectRoot: { type: "string", description: "Absolute path to the user's project root" },
+        localComponent: { type: "object", description: "Local component metadata (name/importPath/variants)" },
+        styleFormat: { type: "string", enum: FORMAT_LIST, description: "Output style format: tailwind/css-modules/scss/styled-components (default tailwind)" },
+        mode: { type: "string", enum: ["flat", "recursive"], description: "Compile mode: flat compiles only the outer container; recursive compiles the whole subtree (default flat)" },
+        siblings: { type: "array", description: "Sibling node list, used to detect responsive breakpoints" },
       },
     },
   },
   {
     name: "fetch_figma_node",
-    description: "从 Figma API 拉取设计节点并规范化为编译器输入格式。返回结构化的节点数据（含 Auto Layout 信息）。",
+    description: "Fetch a design node from the Figma API and normalize it into the compiler input format. Returns structured node data (including Auto Layout info).",
     inputSchema: {
       type: "object",
       properties: {
-        figmaUrl: { type: "string", description: "Figma 设计稿链接" },
-        figmaToken: { type: "string", description: "Figma Access Token（可选，默认用环境变量 FIGMA_ACCESS_TOKEN）" },
-        action: { type: "string", enum: ["node", "file_meta"], description: "拉取节点详情(node)或文件元数据(file_meta)" },
+        figmaUrl: { type: "string", description: "Figma design link" },
+        figmaToken: { type: "string", description: "Figma Access Token (optional; defaults to the FIGMA_ACCESS_TOKEN env var)" },
+        action: { type: "string", enum: ["node", "file_meta"], description: "Fetch node details (node) or file metadata (file_meta)" },
       },
       required: ["figmaUrl"],
     },
   },
   {
     name: "save_component",
-    description: "确定性写操作：清洗 data-node-id、精确落盘、自动更新 index.ts barrel 导出。",
+    description: "Deterministic write op: strip data-node-id, write to the exact path, and auto-update the index.ts barrel export.",
     inputSchema: {
       type: "object",
       properties: {
@@ -501,7 +520,7 @@ const TOOLS = [
   },
   {
     name: "remember_mapping",
-    description: "把用户确认过的 Figma→本地组件映射沉淀为私有资产，形成切换成本护城河。",
+    description: "Persist a user-confirmed Figma->local-component mapping as a private asset, forming a switching-cost moat.",
     inputSchema: {
       type: "object",
       properties: {
@@ -515,7 +534,7 @@ const TOOLS = [
   },
   {
     name: "cache_clear",
-    description: "清除所有编译缓存（L1 内存 + L2 磁盘），用于数据源变更后强制刷新。",
+    description: "Clear all compile caches (L1 memory + L2 disk); use to force a refresh after the data source changes.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -523,50 +542,50 @@ const TOOLS = [
   },
   {
     name: "scan_components",
-    description: "自动扫描项目本地组件库（shadcn/ui / radix / antd / mui），提取组件名、CVA variants 定义和导入路径。",
+    description: "Auto-scan the project's local component library (shadcn/ui / radix / antd / mui) and extract component names, CVA variant definitions, and import paths.",
     inputSchema: {
       type: "object",
-      properties: { projectRoot: { type: "string", description: "项目根目录绝对路径" } },
+      properties: { projectRoot: { type: "string", description: "Absolute path to the project root" } },
       required: ["projectRoot"],
     },
   },
   {
     name: "check_mapping_health",
-    description: "检查映射资产库中引用的组件文件是否仍存在，标记失效条目。",
+    description: "Check whether component files referenced by the mapping asset library still exist, and flag stale entries.",
     inputSchema: {
       type: "object",
-      properties: { projectRoot: { type: "string", description: "项目根目录绝对路径" } },
+      properties: { projectRoot: { type: "string", description: "Absolute path to the project root" } },
       required: ["projectRoot"],
     },
   },
   {
     name: "export_mappings",
-    description: "导出 .smart-figma/mappings.json 映射资产（可用于团队共享或迁移）。",
+    description: "Export the .smart-figma/mappings.json mapping assets (for team sharing or migration).",
     inputSchema: {
       type: "object",
-      properties: { projectRoot: { type: "string", description: "项目根目录绝对路径" } },
+      properties: { projectRoot: { type: "string", description: "Absolute path to the project root" } },
       required: ["projectRoot"],
     },
   },
   {
     name: "import_mappings",
-    description: "从外部 JSON 导入映射资产，合并到本地 .smart-figma/mappings.json。不覆盖同名条目。",
+    description: "Import mapping assets from external JSON and merge them into the local .smart-figma/mappings.json. Existing keys are not overwritten.",
     inputSchema: {
       type: "object",
       properties: {
-        projectRoot: { type: "string", description: "项目根目录绝对路径" },
-        data: { type: "object", description: "导出的 JSON 数据（含 mappings 数组）" },
+        projectRoot: { type: "string", description: "Absolute path to the project root" },
+        data: { type: "object", description: "Exported JSON data (containing a mappings array)" },
       },
       required: ["projectRoot", "data"],
     },
   },
   {
     name: "refresh_crl",
-    description: "从远程刷新 License 吊销列表（CRL），缓存到本地 .smart-figma/crl.json。",
+    description: "Refresh the license revocation list (CRL) from a remote URL and cache it locally to .smart-figma/crl.json.",
     inputSchema: {
       type: "object",
       properties: {
-        url: { type: "string", description: "CRL 远程 URL（可选，默认使用环境变量 CRL_URL）" },
+        url: { type: "string", description: "Remote CRL URL (optional; defaults to the CRL_URL env var)" },
       },
     },
   },
@@ -618,7 +637,7 @@ function send(msg) {
 async function handle(req) {
   const { id, method, params } = req;
 
-  // 通知(无 id)处理
+  // Notifications (no id) handling.
   if (id === undefined || id === null) {
     if (method === "notifications/initialized") {
       xlog("debug", "client sent notifications/initialized");
@@ -627,17 +646,17 @@ async function handle(req) {
   }
 
   try {
-    // ── initialize（不需要 pre-init 检查） ──
+    // ── initialize (no pre-init check needed) ──
     if (method === "initialize") {
       _initialized = true;
-      // 后台异步初始化 daemon（不阻塞 initialize 响应）
+      // Initialize the daemon asynchronously in the background (does not block the initialize response).
       initDaemon().catch(e => xlog("warn", `daemon init error: ${e.message}`));
-      // 后台探测 BYOK key 有效性（不阻塞）
+      // Probe BYOK key validity in the background (non-blocking).
       const llmConfig = resolveLLMConfig();
       if (llmConfig.byok) {
         probeKey(llmConfig).then(result => {
-          if (!result.valid) xlog("warn", `BYOK key 无效 (${result.reason})，将回退 Credits 制。`);
-          else xlog("info", `BYOK key 验证通过 (${llmConfig.provider})`);
+          if (!result.valid) xlog("warn", `BYOK key invalid (${result.reason}); will fall back to Credits.`);
+          else xlog("info", `BYOK key verified (${llmConfig.provider})`);
         }).catch(() => {});
       }
       return send({ jsonrpc: "2.0", id, result: {
@@ -647,12 +666,12 @@ async function handle(req) {
       }});
     }
 
-    // ── ping（无需初始化） ──
+    // ── ping (no init required) ──
     if (method === "ping") {
       return send({ jsonrpc: "2.0", id, result: {} });
     }
 
-    // ── health（无需初始化，用于诊断） ──
+    // ── health (no init required; for diagnostics) ──
     if (method === "health") {
       const g = gate();
       let cacheStats = null;
@@ -673,7 +692,7 @@ async function handle(req) {
       }});
     }
 
-    // ── 初始化后门禁 ──
+    // ── Post-initialization gate ──
     if (!_initialized) {
       return send(rpcError(id, ERROR_CODES.NOT_INITIALIZED, "Server not initialized. Send initialize first."));
     }
@@ -706,20 +725,20 @@ rl.on("line", (line) => {
   try {
     req = JSON.parse(trimmed);
   } catch {
-    // JSON 解析失败 → 标准错误码（无法获取 id，用 null）
+    // JSON parse failed -> standard error code (no id available, use null).
     send({ jsonrpc: "2.0", id: null, error: { code: ERROR_CODES.PARSE_ERROR, message: "Parse error" } });
     return;
   }
-  // 空字符串 id 视为 null（通知）
+  // Treat an empty-string id as null (a notification).
   if (req.id === "") req.id = null;
   handle(req);
 });
 
-// ─── 优雅退出 ───
+// ─── Graceful shutdown ───
 function gracefulShutdown(signal) {
-  xlog("warn", `收到 ${signal}，正在关闭...`);
+  xlog("warn", `Received ${signal}, shutting down...`);
   try { rl.close(); } catch {}
-  // 清理临时缓存文件
+  // Clean up temporary cache files.
   const cacheDir = path.join(os.homedir(), ".smart-figma", "cache");
   const tmpPattern = /\.tmp\./;
   try {
@@ -730,11 +749,11 @@ function gracefulShutdown(signal) {
       }
     }
   } catch {}
-  // 通知 daemon 退出
+  // Tell the daemon to exit.
   if (daemon && daemon.connected()) {
     daemon.shutdown().catch(() => {});
   }
-  xlog("info", "server 已关闭。");
+  xlog("info", "server stopped.");
   process.exit(0);
 }
 import os from "node:os";
