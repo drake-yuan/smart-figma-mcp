@@ -11,7 +11,7 @@
     "keygen": "node tools/keygen.js",
     "issue": "node tools/issue-license.js",
     "test": "node test/smoke.mjs",
-    "prepublishOnly": "node test/smoke.mjs 2>&1 | grep -q 'All smoke tests passed'"
+    "prepublishOnly": "node test/smoke.mjs 2>&1 | grep -q '烟囱测试全部通过'"
   },
   "files": [
     "src/",
