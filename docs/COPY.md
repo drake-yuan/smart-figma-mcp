@@ -1,8 +1,8 @@
-# 营销文案模板
+# Marketing Copy Templates
 
-## 海外英文（Twitter / Reddit / IndieHackers）
+## Twitter / X (#buildinpublic)
 
-### 主帖
+### Main Thread
 ```
 90% of frontend devs waste time when using Figma + AI.
 
@@ -26,15 +26,19 @@ Early bird: $19 lifetime (first 50 only)
 Link in bio 🧵👇
 ```
 
-### 对比图文字（截图旁注）
-| Figma 官方 MCP | smart-figma-mcp |
+### Comparison Graphic Captions
+| Figma Official MCP | smart-figma-mcp |
 |---|---|
 | Suggests mapping | Maps + writes files |
 | No code write | Deterministic write |
 | Needs Code Connect config | Zero config (shadcn/ui + cva) |
 | — | BYOK = 0 token cost |
 
-### Reddit r/SideProject 贴
+---
+
+## Reddit (r/SideProject / r/cursor)
+
+### Post
 ```
 Title: I built a Figma-to-Code MCP that writes directly to your project
 
@@ -52,36 +56,63 @@ Source on GitHub + demo video in comments.
 
 ---
 
-## 国内中文（V2EX / 知乎 / 即刻）
+## IndieHackers
 
-### 主帖
+### Post
 ```
-独立开发做了一个 Figma 转代码的 MCP 插件，直接落盘
+I shipped smart-figma-mcp — a Figma-to-Code MCP Server
 
-痛点：把 Figma 链接丢给 AI，AI 不认识你项目里的 shadcn/ui Button，
-重手搓一个 div 堆砌按钮，还要手动删 data-node-id 垃圾属性。
+What problem does it solve?
+Pasting Figma links into Cursor/Claude Code gives you div-soup.
+AI doesn't know your shadcn/ui components.
 
-我做的：
-✅ Figma 组件名 → 本地 shadcn/ui variant 自动映射
-✅ 自动写入 src/components/ui/ + 更新 index.ts
-✅ 物理清洗 data-node-id / data-name
-✅ BYOK 模式（token 走你账单，不经过我服务器）
-✅ 免费档纯本地编译，0 Token 消耗
+My solution:
+• Variant-level mapping: Figma component → cva() props
+• Deterministic write: code lands in src/components/ui/
+• Barrel export auto-update
+• data-node-id stripped on save
+• BYOK — tokens on your bill, zero marginal cost for me
 
-早期买断 $19（合人民币 ~140），限前 50 名。
-后面恢复 $9/月。
+Tech: Node.js, JSON-RPC over stdio, Ed25519 offline license
 
-GitHub + 视频见评论 👇
+Pricing: Free tier (pure digital) + $9/mo Maker + $19 early-bird lifetime
+
+Revenue: $0 (just launched)
+Goal: $100 MRR by end of month
+
+Would love feedback from the community!
 ```
 
-### 知乎回答模板
+---
+
+## Hacker News (Show HN)
+
+### Title
 ```
-Q: Figma 设计稿怎么高效转前端代码？
+Show HN: smart-figma-mcp — Figma to shadcn/ui with deterministic code write
+```
 
-A: 目前有三种方式：
-1. Figma Dev Mode → 手动复制 CSS（最原始）
-2. AI 对话（Cursor/Claude Code）+ Figma 链接 → 凑合用，但不认你的项目组件
-3. smart-figma-mcp → 直接映射到本地 shadcn/ui，自动落盘（新思路）
+### Body
+```
+I got tired of pasting Figma links into Cursor and getting back
+div-soup that doesn't use my project's shadcn/ui components.
 
-第三种我自己在用的，原因是...
+smart-figma-mcp is an MCP server that:
+
+1. Fetches Figma nodes via REST API
+2. Maps Figma component names → your local shadcn/ui variants
+3. Compiles to Tailwind/CSS Modules/SCSS/Styled Components
+4. Writes files deterministically to src/components/ui/
+5. Auto-updates index.ts barrel export
+6. Strips data-node-id and data-name
+
+It's BYOK by default — you bring your own LLM API key, tokens go
+on your bill. Free tier does pure digital compilation (no LLM
+call at all). License is Ed25519 offline verification — zero
+network calls for auth.
+
+Zero dependencies. npm install and go.
+
+Would love feedback on the approach. Is deterministic file write
+the right bet vs. suggestion-only?
 ```
