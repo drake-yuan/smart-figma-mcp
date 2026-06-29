@@ -181,7 +181,7 @@ A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We st
 | **Pro** | $29/mo | 1,500/mo | ✅ | ✅ |
 | **Early Bird Lifetime** | $19 once | Maker plan | ✅ | ✅ |
 
-[Buy License →](https://smart-figma.dev/buy)
+[Buy License →](https://github.com/smart-figma/mcp#pricing)
 
 ---
 
