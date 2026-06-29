@@ -5,7 +5,6 @@
 > BYOK · Variant-level mapping · Deterministic write · Zero external dependencies
 
 [![npm version](https://img.shields.io/npm/v/smart-figma-mcp.svg)](https://www.npmjs.com/package/smart-figma-mcp)
-[![Test](https://github.com/smart-figma/mcp/actions/workflows/test.yml/badge.svg)](https://github.com/smart-figma/mcp/actions/workflows/test.yml)
 [![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](https://nodejs.org)
 
 ## Why smart-figma-mcp?
@@ -181,7 +180,7 @@ A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We st
 | **Pro** | $29/mo | 1,500/mo | ✅ | ✅ |
 | **Early Bird Lifetime** | $19 once | Maker plan | ✅ | ✅ |
 
-[Buy License →](https://github.com/smart-figma/mcp#pricing)
+[Buy License →](https://www.npmjs.com/package/smart-figma-mcp#pricing)
 
 ---
 

@@ -43,4 +43,4 @@ These terms are governed by the laws of the People's Republic of China.
 
 ## Contact
 
-- GitHub Issues: https://github.com/smart-figma/mcp/issues
+- npm: https://www.npmjs.com/package/smart-figma-mcp

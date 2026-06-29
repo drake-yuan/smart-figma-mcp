@@ -37,11 +37,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/smart-figma/mcp.git"
+    "url": "https://www.npmjs.com/package/smart-figma-mcp"
   },
-  "homepage": "https://github.com/smart-figma/mcp#readme",
+  "homepage": "https://www.npmjs.com/package/smart-figma-mcp",
   "bugs": {
-    "url": "https://github.com/smart-figma/mcp/issues"
+    "url": "https://www.npmjs.com/package/smart-figma-mcp"
   },
   "author": "Smart Figma Team",
   "license": "SEE LICENSE IN LICENSE",
