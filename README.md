@@ -29,7 +29,17 @@ When you paste a Figma link into Cursor / Claude Code, AI doesn't know your proj
 npx smart-figma-mcp
 ```
 
-Then add this to your Cursor MCP config (`~/.cursor/mcp.json`):
+### IDE Setup
+
+smart-figma-mcp uses MCP (Model Context Protocol). Add this to your IDE's MCP config:
+
+**Cursor / Kiro / Windsurf** — same JSON, different config paths:
+
+| IDE | Config File |
+|-----|-------------|
+| Cursor | `~/.cursor/mcp.json` |
+| Kiro | `~/.kiro/mcp.json` or `.kiro/mcp.json` (project-level) |
+| Windsurf | `~/.windsurf/mcp.json` |
 
 ```json
 {
@@ -48,7 +58,7 @@ Then add this to your Cursor MCP config (`~/.cursor/mcp.json`):
 }
 ```
 
-### Claude Code
+**Claude Code** — use shell env variables instead of inline env:
 
 ```json
 {
@@ -60,11 +70,10 @@ Then add this to your Cursor MCP config (`~/.cursor/mcp.json`):
   }
 }
 ```
-Set `SMART_FIGMA_LICENSE` + `FIGMA_ACCESS_TOKEN` as shell env variables.
-
-### Windsurf
-
-Same as Cursor — add to `~/.windsurf/mcp.json`.
+```bash
+export SMART_FIGMA_LICENSE="<your-license-token>"
+export FIGMA_ACCESS_TOKEN="<your-figma-personal-access-token>"
+```
 
 ## Tools
 
@@ -154,6 +163,9 @@ A: Purchase from the payment link → receive your license token → paste in MC
 **Q: Can I share my license across devices?**
 A: Yes, up to 2 device fingerprints. Contact support for more.
 
+**Q: Does it work with Kiro + Figma Power?**
+A: Yes — smart-figma-mcp complements Kiro's built-in Figma Power. Figma Power reads designs; smart-figma-mcp deterministically writes code to your project. Use both side-by-side.
+
 **Q: Does BYOK mode still consume credits?**
 A: No — when using your own API key, credits are not deducted. Only the quotas service (if enabled) records usage counts.
 
@@ -165,9 +177,10 @@ A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We st
 | IDE / Tool | Support |
 |---|---|
 | Cursor | ✅ Full |
+| Kiro | ✅ Full |
 | Claude Code | ✅ Full |
 | Windsurf | ✅ Full |
-| VS Code (with MCP extension) | ✅ |
+| VS Code (MCP extension) | ✅ |
 | Continue.dev | ⚠️ Limited |
 | Cline | ⚠️ Limited |
 
