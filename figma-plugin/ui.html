@@ -61,12 +61,12 @@
 <body>
   <h2>⚡ Auto Layoutify</h2>
   <p class="desc">
-    一键将选中的 Frame 从自由布局转换为 Auto Layout。
-    转换后可零 Token 编译，还原精度大幅提升。
+    Convert selected Frames from free-form layout to Auto Layout with one click.
+    Enjoy zero-token compilation with dramatically improved output fidelity.
   </p>
 
-  <button class="btn btn-primary" id="btnConvert">🚀 转换选中 Frame</button>
-  <button class="btn btn-secondary" id="btnCancel">关闭</button>
+  <button class="btn btn-primary" id="btnConvert">🚀 Convert Selected Frames</button>
+  <button class="btn btn-secondary" id="btnCancel">Close</button>
 
   <div class="progress" id="progress">
     <div class="progress-bar-bg">
@@ -76,12 +76,12 @@
   </div>
 
   <div class="tips">
-    <strong>💡 提示</strong><br>
-    • 选中一个或多个 Frame 后点击转换<br>
-    • 插件会自动推断主轴方向、间距和 padding<br>
-    • 转换后 Frame 名称会添加 [Auto Layout] 标记<br>
-    • Ctrl+Z 可撤销转换<br>
-    • 转换后在 Smart Figma MCP 中重新编译 → 零 Token
+    <strong>💡 Tips</strong><br>
+    • Select one or more Frames, then click Convert<br>
+    • The plugin auto-infers main axis direction, spacing, and padding<br>
+    • Converted Frames get a [Auto Layout] name suffix<br>
+    • Ctrl+Z to undo conversion<br>
+    • Recompile in Smart Figma MCP after conversion → zero tokens
   </div>
 
   <script>
@@ -94,7 +94,7 @@
     btnConvert.addEventListener("click", () => {
       btnConvert.disabled = true;
       progress.classList.add("active");
-      result.innerHTML = '<span class="ok">⏳ 正在转换...</span>';
+      result.innerHTML = '<span class="ok">⏳ Converting...</span>';
       fill.style.width = "0%";
       parent.postMessage({ pluginMessage: { type: "auto-layoutify" } }, "*");
     });
@@ -113,16 +113,16 @@
         result.innerHTML = `
           <span class="ok">⏳ ${msg.current}/${msg.total}</span>
           ${msg.lastNode ? ' — ' + msg.lastNode : ''}
-          ${msg.errors > 0 ? '<br><span class="err">跳过 ' + msg.errors + ' 个</span>' : ''}
+          ${msg.errors > 0 ? '<br><span class="err">' + msg.errors + ' skipped</span>' : ''}
         `;
       } else if (msg.type === "done") {
         btnConvert.disabled = false;
         if (msg.converted > 0 && msg.errors === 0) {
-          result.innerHTML = `<span class="ok">✅ 成功转换 ${msg.converted} 个 Frame！<br>Ctrl+Z 可撤销，重新导出后可零 Token 编译。</span>`;
+          result.innerHTML = `<span class="ok">✅ ${msg.converted} Frame(s) converted successfully!<br>Undo with Ctrl+Z. Re-export for zero-token compile.</span>`;
         } else if (msg.converted > 0) {
-          result.innerHTML = `<span class="ok">✅ ${msg.converted} 个成功</span> <span class="err">${msg.errors} 个跳过</span>`;
+          result.innerHTML = `<span class="ok">✅ ${msg.converted} succeeded</span> <span class="err">${msg.errors} skipped</span>`;
         } else {
-          result.innerHTML = '<span class="err">⚠️ 没有可转换的 Frame。请选中包含多个子节点的 Frame 后重试。</span>';
+          result.innerHTML = '<span class="err">⚠️ No convertible Frames found. Select a Frame with multiple children and try again.</span>';
         }
       }
     });
