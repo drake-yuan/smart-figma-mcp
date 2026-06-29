@@ -1,6 +1,6 @@
 {
   "name": "smart-figma-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Smart Figma-to-Code MCP Server — map Figma designs to your local shadcn/ui components, generate code, and write files. BYOK + Variant-level mapping + deterministic write.",
   "type": "module",
   "bin": {
