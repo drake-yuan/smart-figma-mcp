@@ -101,7 +101,8 @@ export async function debit({ sub, quota, strategy, byok }) {
   const cost = CREDIT_COST[strategy] ?? CREDIT_COST.SEMANTIC;
   const idempotencyKey = crypto.randomUUID();
 
-  // BYOK: token cost is billed to the user, our variable cost is zero -> no credit deduction.
+  // BYOK: the server never calls the LLM, so there is no credit to deduct here.
+  // (Any client-side LLM call runs on the user's own key, not ours.)
   if (byok) return { ok: true, remaining: Infinity, cost, byok: true };
 
   // Visual fallback is only available to plans that include it (free tier costs us nothing).

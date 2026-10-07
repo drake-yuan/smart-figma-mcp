@@ -18,7 +18,7 @@ What it does:
 ✅ Writes code directly to src/components/ui/
 ✅ Auto-updates index.ts barrel export
 ✅ Strips data-node-id garbage
-✅ BYOK — tokens go on YOUR bill, zero cost on our side
+✅ BYOK — bring your own key; the server makes zero LLM calls (nothing to bill)
 
 Free tier: pure digital compilation, no LLM call, 0 token.
 

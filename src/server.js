@@ -7,7 +7,7 @@
 //
 // Gate order (run on every tools/call, fully local and sub-millisecond):
 //   1) offline license verification (license.js)  -> reject outright on failure
-//   2) BYOK resolution (byok.js)                   -> with own key, token bills the user
+//   2) BYOK resolution (byok.js)                   -> validates the user's own key; server still never calls the LLM
 //   3) complexity analysis (compiler.js)           -> choose PURE_DIGITAL / SEMANTIC / VISUAL
 //   4) quota deduction (quota.js)                  -> non-BYOK deducts credits, server-authoritative
 //   5) compile + variant mapping                   -> produce assembly context
@@ -179,7 +179,7 @@ async function toolCompile(args) {
     if (freeTier && charge.reason === "free_tier_pure_digital_only") {
       return errContent(
         `The free tier supports pure-digital compile of clean Auto Layout designs only. This design needs a higher tier (${complexity.strategy}). ` +
-        `Set SMART_FIGMA_LICENSE to unlock the Maker/Pro tiers (BYOK pays your own tokens; we take zero cut).`
+        `Set SMART_FIGMA_LICENSE to unlock the Maker/Pro tiers (unlimited compiles + local component variant mapping).`
       );
     }
     if (freeTier && charge.reason === "free_tier_daily_exceeded") {
@@ -253,7 +253,7 @@ async function toolCompile(args) {
       ? { mode: "FREE", remaining: charge.remaining, dailyLimit: charge.limit,
           note: `Free tier: pure-digital compile only, ${charge.remaining}/${charge.limit} left today. Set SMART_FIGMA_LICENSE to unlock more.` }
       : llm.byok
-      ? { mode: "BYOK", provider: llm.provider, note: "token bills the user; our variable cost is zero" }
+      ? { mode: "BYOK", provider: llm.provider, note: "server does not call the LLM; the client LLM (if used) runs on the user's own key" }
       : { mode: "CREDITS", charged: charge.cost, remaining: charge.remaining },
     strategy: complexity.strategy,
     complexityReport: visualizeComplexity(complexity),
@@ -576,7 +576,7 @@ function updateBarrel(dir, componentName) {
 const TOOLS = [
   {
     name: "compile_figma_component",
-    description: "Compile a Figma node into a Tailwind + variant-mapping context. Accepts an offline figmaNode JSON or a figmaUrl (live Figma API). In BYOK mode the token bills the user.",
+    description: "Compile a Figma node into a Tailwind + variant-mapping context. Accepts an offline figmaNode JSON or a figmaUrl (live Figma API). The server returns a prompt; the client LLM performs the actual generation.",
     inputSchema: {
       type: "object",
       properties: {

@@ -1,5 +1,7 @@
 // byok.js — Bring Your Own Key (BYOK) v2
-// LLM token cost is billed directly to the user's own account, never ours.
+// This server never calls the LLM itself — it only maps Figma → components and
+// returns a prompt. The client (Cursor / Claude Code / Codex) performs the actual
+// LLM call on the user's own key, so we never bill or pay for any tokens here.
 // Our subscription fee sells only the engineering orchestration layer.
 //
 // v2 additions: deepseek / zhipu providers, API key validity probe, security warning.
