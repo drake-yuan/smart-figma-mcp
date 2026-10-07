@@ -12,3 +12,19 @@ jobs:
       - run: |
           TOKEN=$(node tools/issue-license.js --sub ci --plan maker --days 1 --quota-monthly 10 2>/dev/null | head -2 | tail -1)
           SMART_FIGMA_LICENSE="$TOKEN" node test/smoke.mjs
+
+  # Astryx contract tests. These need no license, no Figma access, and no
+  # network: the suites run offline against a captured real CLI response
+  # (test/astryx-contract-fixtures.mjs), so a contract-shape change upstream
+  # shows up as a test failure rather than a silent behaviour change.
+  astryx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node test/astryx-adapter.mjs
+      - run: node test/astryx-mapping.mjs
+      - run: ASTRYX_FIXTURE=1 node test/astryx-mapping.mjs
+      - run: node test/astryx-e2e.mjs

@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.1.0] — 2026-10-07
+### Astryx design-system contract support
+- `src/astryx-contract.js` (new): adapter over `@astryxdesign/cli`, normalising
+  the machine-readable component contract into the same descriptor shape the
+  shadcn/ui path produces
+- `src/mapping.js`: `@astryxdesign/core` added to `KNOWN_LIBS`;
+  `scanLocalComponents()` enumerates Astryx via contract instead of source
+  scanning; `mapAstryxComponent()` resolves props on demand
+- `src/server.js`: new tools `probe_astryx` and `fetch_astryx_contract`
+  (12 tools total)
+- Variant values are read from the shipped contract rather than inferred, so
+  out-of-contract props (e.g. a non-existent `variant="ghost-primary"`) are
+  rejected deterministically
+- Beta containment: tagged errors instead of exceptions, version-stamped
+  contract cache, and distinct reporting for "CLI missing" vs "core missing"
+  (`ERR_CORE_NOT_FOUND`)
+- `ASTRYX_NODE_BIN` env override for the interpreter used to spawn the CLI
+- Tests: `test/astryx-adapter.mjs`, `test/astryx-e2e.mjs`,
+  `test/astryx-mapping.mjs`, plus `test/astryx-contract-fixtures.mjs`
+  (captured real CLI response, 166 components) — 62 assertions
+- `README.md`: Astryx section, tool table, architecture notes, FAQ
+- `.github/workflows/test.yml`: Astryx suites added to CI
+- `package.json`: keywords, version 1.1.0
+
+## [1.0.2] — 2026-07-29
+### Distribution
+- Source Available licensing; repository metadata for public evaluation
+
 ## [1.0.0] — 2026-06-21
 ### Module 07: npm Publishing + Distribution
 - `package.json`: description, keywords, repository, homepage, bugs, files whitelist, engines ≥18.0.0

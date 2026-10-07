@@ -1,27 +1,79 @@
 # smart-figma-mcp
 
-> **Map Figma designs to your local shadcn/ui components, generate code, and write files.**
+> **Map Figma designs to your local component library — shadcn/ui, antd, mui, or Astryx — generate code, and write files.**
 >
 > BYOK · Variant-level mapping · Deterministic write · Zero external dependencies
 
-[![npm version](https://img.shields.io/npm/v/smart-figma-mcp.svg)](https://www.npmjs.com/package/smart-figma-mcp)
-[![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](https://nodejs.org)
+![npm version](https://img.shields.io/npm/v/smart-figma-mcp.svg)
+
+![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)
 
 ## Why smart-figma-mcp?
 
-When you paste a Figma link into Cursor / Claude Code, AI doesn't know your project components. It generates raw `<div>` soup every time — wrong styles, no variants, garbage `data-node-id` attributes.
+When you paste a Figma link into Cursor / Claude Code, AI doesn't know your project components. It generates raw `<div>` soup every time — wrong styles, no variants, garbage `data-node-id` attributes. Ask for a `<Button variant="ghost-primary">` and you'll get a prop that doesn't exist.
 
 **smart-figma-mcp** bridges this gap:
 
-|  | Figma Official MCP | smart-figma-mcp |
-|---|---|---|
-| Read Figma / suggest mapping | ✅ Native | ✅ |
-| Write to your codebase | ❌ | ✅ Deterministic write |
-| Variant mapping (zero config) | ❌ (needs Code Connect) | ✅ shadcn/ui + cva auto-align |
-| Token cost attribution | Unclear | ✅ BYOK — on YOUR bill |
-| data-node-id cleanup | ❌ | ✅ Stripped on save |
+|                                  | Figma Official MCP     | smart-figma-mcp                                     |
+| -------------------------------- | ---------------------- | --------------------------------------------------- |
+| Read Figma / suggest mapping     | ✅ Native               | ✅                                                   |
+| Write to your codebase           | ❌                      | ✅ Deterministic write                               |
+| Variant mapping (zero config)    | ❌ (needs Code Connect) | ✅ shadcn/ui + cva auto-align                        |
+| Authoritative component contract | ❌                      | ✅ shadcn/ui, antd, mui, **Astryx (166 components)** |
+| Token cost attribution           | Unclear                | ✅ BYOK — on YOUR bill                               |
+| data-node-id cleanup             | ❌                      | ✅ Stripped on save                                  |
 
 **We don't compete on "read and suggest". We win on "write and land".**
+
+## Design-System Contract Engines
+
+The core problem with AI-generated UI isn't layout — it's that the model  
+**guesses** at your component API. smart-figma-mcp resolves variants against a  
+real source of truth instead, and each supported library has its own engine:
+
+| Library           | Contract source             | How variants are resolved                                                          |
+| ----------------- | --------------------------- | ---------------------------------------------------------------------------------- |
+| shadcn/ui         | `cva()` call in your source | Parsed from the variant definition                                                 |
+| radix-ui          | local `.tsx`                | Primitives + your own wrappers                                                     |
+| antd / mui        | local `.tsx`                | Component metadata                                                                 |
+| **Astryx (Meta)** | **CLI JSON contract**       | **`@astryxdesign/cli` — the same machine-readable manifest Meta ships for agents** |
+
+### Astryx: zero-hallucination mapping
+
+[Astryx](https://github.com/facebook/astryx) is Meta's open-source design  
+system, built to be consumed by AI agents. It publishes its component API as  
+JSON, so smart-figma-mcp can validate props **deterministically** instead of  
+inferring them:
+
+```bash
+npm install @astryxdesign/core @stylexjs/stylex
+npm install -D @astryxdesign/cli
+```
+
+```json
+{
+  "name": "Button",
+  "importPath": "@astryxdesign/core/Button",
+  "variants": {
+    "variant": ["primary", "secondary", "ghost", "destructive"],
+    "size": ["sm", "md", "lg"],
+    "elevation": ["none", "low", "med", "high"]
+  },
+  "requiredProps": ["label"]
+}
+```
+
+That `variants` map is the *shipped* contract, not a scrape — so  
+`variant="ghost-primary"` is rejected because it genuinely isn't in the enum,  
+not because a heuristic guessed wrong.
+
+Two properties worth knowing:
+
+- **Beta-contained.** Astryx is v0.x and may break between minors. Contract    
+  reads are cached per CLI version, and any failure degrades to "no Astryx    
+  components" — it never breaks component scanning for your other libraries.
+- **Lazy by design.** The 166-component index is enumerated once; props are    
+  fetched per component on demand rather than all up front.
 
 ## Quick Start (5 minutes)
 
@@ -35,11 +87,11 @@ smart-figma-mcp uses MCP (Model Context Protocol). Add this to your IDE's MCP co
 
 **Cursor / Kiro / Windsurf** — same JSON, different config paths:
 
-| IDE | Config File |
-|-----|-------------|
-| Cursor | `~/.cursor/mcp.json` |
-| Kiro | `~/.kiro/mcp.json` or `.kiro/mcp.json` (project-level) |
-| Windsurf | `~/.windsurf/mcp.json` |
+| IDE      | Config File                                            |
+| -------- | ------------------------------------------------------ |
+| Cursor   | `~/.cursor/mcp.json`                                   |
+| Kiro     | `~/.kiro/mcp.json` or `.kiro/mcp.json` (project-level) |
+| Windsurf | `~/.windsurf/mcp.json`                                 |
 
 ```json
 {
@@ -70,6 +122,7 @@ smart-figma-mcp uses MCP (Model Context Protocol). Add this to your IDE's MCP co
   }
 }
 ```
+
 ```bash
 export SMART_FIGMA_LICENSE="<your-license-token>"
 export FIGMA_ACCESS_TOKEN="<your-figma-personal-access-token>"
@@ -77,28 +130,32 @@ export FIGMA_ACCESS_TOKEN="<your-figma-personal-access-token>"
 
 ## Tools
 
-| Tool | Description |
-|---|---|
+| Tool                      | Description                                                            |
+| ------------------------- | ---------------------------------------------------------------------- |
 | `compile_figma_component` | Compile Figma node → Tailwind/CSS + variant mapping + assembly context |
-| `fetch_figma_node` | Fetch raw Figma node via Figma REST API |
-| `save_component` | Deterministic write: clean data-node-id, save file, update index.ts |
-| `remember_mapping` | Save user-confirmed mapping → private asset library |
-| `scan_components` | Auto-scan project component library (shadcn/ui / antd / mui) |
-| `check_mapping_health` | Check if mapped component files still exist |
-| `export_mappings` | Export mapping assets as JSON |
-| `import_mappings` | Import mapping assets from JSON (merge, non-destructive) |
-| `cache_clear` | Clear compilation cache |
-| `refresh_crl` | Refresh License revocation list from remote |
+| `fetch_figma_node`        | Fetch raw Figma node via Figma REST API                                |
+| `save_component`          | Deterministic write: clean data-node-id, save file, update index.ts    |
+| `remember_mapping`        | Save user-confirmed mapping → private asset library                    |
+| `scan_components`         | Auto-scan project component library (shadcn/ui / antd / mui / Astryx)  |
+| `probe_astryx`            | Check whether the Astryx contract is available (CLI + core, version)   |
+| `fetch_astryx_contract`   | Fetch authoritative Astryx components + props (types, enums, required) |
+| `check_mapping_health`    | Check if mapped component files still exist                            |
+| `export_mappings`         | Export mapping assets as JSON                                          |
+| `import_mappings`         | Import mapping assets from JSON (merge, non-destructive)               |
+| `cache_clear`             | Clear compilation cache                                                |
+| `refresh_crl`             | Refresh License revocation list from remote                            |
 
 ## Modes
 
 ### Free Tier (Hacker)
+
 - Pure digital compilation (PURE_DIGITAL path)
 - No LLM call, zero token consumption
 - Auto Layout nodes → Tailwind/CSS output
 - Good for: well-structured Figma files with Auto Layout
 
 ### BYOK (Bring Your Own Key)
+
 - **$9/month** or **$19 lifetime** (early bird)
 - Plug your own API key (OpenAI / Anthropic / DeepSeek / Zhipu)
 - Tokens go on YOUR bill — zero cost on our side
@@ -106,12 +163,13 @@ export FIGMA_ACCESS_TOKEN="<your-figma-personal-access-token>"
 - All tools unlocked
 
 ### Supported LLM Providers
-| Provider | Env Var | Base URL |
-|---|---|---|
-| OpenAI | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
-| Anthropic | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1` |
-| DeepSeek | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` |
-| Zhipu (GLM) | `ZHIPU_API_KEY` | `https://open.bigmodel.cn/api/paas/v4` |
+
+| Provider    | Env Var             | Base URL                               |
+| ----------- | ------------------- | -------------------------------------- |
+| OpenAI      | `OPENAI_API_KEY`    | `https://api.openai.com/v1`            |
+| Anthropic   | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1`         |
+| DeepSeek    | `DEEPSEEK_API_KEY`  | `https://api.deepseek.com/v1`          |
+| Zhipu (GLM) | `ZHIPU_API_KEY`     | `https://open.bigmodel.cn/api/paas/v4` |
 
 Set `LLM_PROVIDER` + `LLM_API_KEY` (or the provider-specific env var) to enable BYOK.
 
@@ -119,14 +177,14 @@ Set `LLM_PROVIDER` + `LLM_API_KEY` (or the provider-specific env var) to enable 
 
 The compiler auto-detects node complexity with an additive score and routes accordingly:
 
-| Score | Level | Strategy | Token Cost |
-|---|---|---|---|
-| `< 35` | **SIMPLE** | PURE_DIGITAL — direct math computation | 0 |
-| `35–74` | **MODERATE** | SEMANTIC — coordinate-flow clustering | ~1 credit |
-| `≥ 75` | **COMPLEX** | VISUAL — multi-modal LLM | ~5 credits |
+| Score   | Level        | Strategy                               | Token Cost |
+| ------- | ------------ | -------------------------------------- | ---------- |
+| `< 35`  | **SIMPLE**   | PURE_DIGITAL — direct math computation | 0          |
+| `35–74` | **MODERATE** | SEMANTIC — coordinate-flow clustering  | ~1 credit  |
+| `≥ 75`  | **COMPLEX**  | VISUAL — multi-modal LLM               | ~5 credits |
 
-Score terms: no Auto Layout `+30`, absolute-positioned child `+15` each,
-coordinate-flow child `+5` each (capped at 50, `+20` more beyond 10),
+Score terms: no Auto Layout `+30`, absolute-positioned child `+15` each,  
+coordinate-flow child `+5` each (capped at 50, `+20` more beyond 10),  
 depth beyond 4 `+8` per level.
 
 Non-standard layouts don't fail — they return `SUGGEST_AUTOLAYOUT`, guiding you to fix at the Figma source.
@@ -158,62 +216,107 @@ Non-standard layouts don't fail — they return `SUGGEST_AUTOLAYOUT`, guiding yo
 
 ## Engineering Notes
 
-What follows is the reasoning behind the parts that are not obvious from the
+What follows is the reasoning behind the parts that are not obvious from the  
 tool list. If you only want to use it, skip this section.
 
-### 3,700 lines, no runtime dependencies
+### ~4,200 lines, no runtime dependencies
 
-| Module | Lines | Responsibility |
-|---|---:|---|
-| `server.js` | 763 | MCP surface, tool routing, Figma REST orchestration |
-| `compiler.js` | 525 | Tiered compile strategy, recursive subtree compile |
-| `mapping.js` | 319 | Variant resolution against the local component library |
-| `daemon.js` / `daemon-client.js` | 387 | Long-lived cache process, socket IPC |
-| `figma-client.js` / `figma-normalizer.js` | 311 | REST fetch + node normalization |
-| `license.js` / `quota.js` / `byok.js` | 413 | Entitlement, quota accounting, provider routing |
-| `cache.js` / `figma-screenshot.js` | 309 | Compile cache, screenshot fallback |
-| `tools/*` | 336 | Key generation, license issuing, quota service |
-| `test/smoke.mjs` | 341 | End-to-end smoke coverage |
+| Module                                    | Lines | Responsibility                                            |
+| ----------------------------------------- | ----: | --------------------------------------------------------- |
+| `server.js`                               |   890 | MCP surface, tool routing, Figma REST orchestration       |
+| `compiler.js`                             |   525 | Tiered compile strategy, recursive subtree compile        |
+| `astryx-contract.js`                      |   480 | Astryx CLI contract adapter, union-type → enum resolution |
+| `mapping.js`                              |   404 | Variant resolution against the local component library    |
+| `daemon.js` / `daemon-client.js`          |   387 | Long-lived cache process, socket IPC                      |
+| `figma-client.js` / `figma-normalizer.js` |   311 | REST fetch + node normalization                           |
+| `license.js` / `quota.js` / `byok.js`     |   413 | Entitlement, quota accounting, provider routing           |
+| `cache.js` / `figma-screenshot.js`        |   309 | Compile cache, screenshot fallback                        |
+| `tools/*`                                 |   336 | Key generation, license issuing, quota service            |
+| `test/smoke.mjs`                          |   341 | End-to-end smoke coverage                                 |
+| `test/astryx-*.mjs`                       |   288 | Astryx adapter + mapping contract tests (62 assertions)   |
 
-No runtime `dependencies` field in `package.json` — MCP over stdio plus `fetch`
-and `node:crypto` are all that is required. This keeps install fast and avoids
+No runtime `dependencies` field in `package.json` — MCP over stdio plus `fetch`  
+and `node:crypto` are all that is required. This keeps install fast and avoids  
 the supply-chain surface a dependency tree would add.
 
 ### Why a tiered compile strategy
 
-A single strategy wastes money and produces bad output. `compiler.js` scores
-every node and routes it by additive score (the table above). Two details in
+A single strategy wastes money and produces bad output. `compiler.js` scores  
+every node and routes it by additive score (the table above). Two details in  
 that scoring are deliberate:
 
-**Coordinate-flow children are counted separately from absolute-positioned
-ones.** A child with `x`/`y` but no Auto Layout is a grid the compiler can
-recover; a child tagged `layoutPositioning === "ABSOLUTE"` is an overlay it
-cannot. Treating the two the same is what makes naive implementations fail on
+**Coordinate-flow children are counted separately from absolute-positioned  
+ones.** A child with `x`/`y` but no Auto Layout is a grid the compiler can  
+recover; a child tagged `layoutPositioning === "ABSOLUTE"` is an overlay it  
+cannot. Treating the two the same is what makes naive implementations fail on  
 real design files.
 
-**Depth is a hard limit, not a hint.** `MAX_DEPTH = 6`; `compileRecursive()`
-records a `depthWarning` and skips rather than recursing deeper. Unbounded
-recursion on a pathological Figma tree is a real failure mode, and a skipped
+**Depth is a hard limit, not a hint.** `MAX_DEPTH = 6`; `compileRecursive()`  
+records a `depthWarning` and skips rather than recursing deeper. Unbounded  
+recursion on a pathological Figma tree is a real failure mode, and a skipped  
 subtree is visible in the output instead of silently truncating.
 
-**Degrade to advice, not to a guess.** When a node is too complex to compile
-reliably, the compiler returns `SUGGEST_AUTOLAYOUT` and points at the
-`figma_auto_layoutify` plugin — a source-side fix. It does not emit code it
-cannot stand behind. The free tier is `PURE_DIGITAL` only, which means the free
+
+**Degrade to advice, not to a guess.** When a node is too complex to compile  
+reliably, the compiler returns `SUGGEST_AUTOLAYOUT` and points at the  
+`figma_auto_layoutify` plugin — a source-side fix. It does not emit code it  
+cannot stand behind. The free tier is `PURE_DIGITAL` only, which means the free  
 path is genuinely deterministic rather than quietly degraded.
 
-**Naming reflects what actually ran.** The router reports `PURE_DIGITAL` /
-`SEMANTIC` / `VISUAL`, while the recursive compiler emits `PURE_DIGITAL` /
-`COORDINATE_FLOW` / `LEAF`. The first is a cost decision; the second is the
-executed path. They line up in practice but are not the same vocabulary, and
+**Naming reflects what actually ran.** The router reports `PURE_DIGITAL` /  
+`SEMANTIC` / `VISUAL`, while the recursive compiler emits `PURE_DIGITAL` /  
+`COORDINATE_FLOW` / `LEAF`. The first is a cost decision; the second is the  
+executed path. They line up in practice but are not the same vocabulary, and  
 `MappingResult.strategy` reflects the executed path.
 
 ### Variant mapping without a config file
 
-`mapping.js` resolves a Figma node to a local component by inspecting the
-project's own component library (shadcn/ui, antd, mui). Variants come from
-Figma's own variant properties reconciled through `cva`, so adding a component
-to the project is enough — there is no mapping file to maintain.
+`mapping.js` resolves a Figma node to a local component by inspecting the  
+project's own component library (shadcn/ui, antd, mui, Astryx). Variants come  
+from Figma's own variant properties reconciled against the library's contract,  
+so adding a component to the project is enough — there is no mapping file to  
+maintain.
+
+### Two contract engines, one descriptor
+
+Both supported paths end at the same shape — `{ name, importPath, variants }` —  
+so `mapToVariant()` and everything downstream stays library-agnostic. Only the  
+way the contract is *obtained* differs:
+
+- **Source-derived (shadcn/ui).** `parseCVA()` reads the `cva()` call out of    
+  the component's `.tsx`. It is a heuristic over source that happens to be    
+  reliable because shadcn has a fixed convention.
+- **Contract-derived (Astryx).** `astryx-contract.js` shells out to    
+  `@astryxdesign/cli` and reads the component's props table directly. The enum    
+  values are the ones Meta ships, so nothing is inferred.
+
+The interesting part is what the CLI actually hands back: a prop's `type` is a  
+raw TypeScript union of string literals, e.g.  
+`"'primary' | 'secondary' | 'ghost' | 'destructive'"`. `parseUnionValues()`  
+turns that into the allowed set, and that set becomes the `variants` dimension.  
+A union that contains no literals (`string | number`) yields an empty set, which  
+`mapToVariant()` already handles by leaving that dimension unmapped — the  
+parser fails closed rather than inventing values.
+
+### Beta dependencies are contained, not ignored
+
+Astryx is v0.x and documents that breaking changes may land in any minor  
+release. Three decisions follow:
+
+- **Degrade, never throw.** Every CLI call resolves to a tagged error. A missing    
+  or broken Astryx install reduces the component list to empty; it does not    
+  propagate into component scanning for the other libraries.
+- **Version-stamped cache.** Contracts are cached under the CLI version that    
+  produced them, so an upgrade transparently invalidates rather than serving a    
+  stale enum that would produce wrong code.
+- **Distinguish missing states.** The `component` command requires    
+  `@astryxdesign/core` to be present even if the CLI is installed — without it    
+  the call returns `ERR_CORE_NOT_FOUND`. `probe_astryx` reports    
+  `cliInstalled` / `coreInstalled` separately and returns the exact install    
+  command, instead of a generic failure the caller has to interpret.
+
+If you use a different node runtime and the CLI cannot be spawned, set  
+`ASTRYX_NODE_BIN` to the interpreter to use.
 
 ### Writing to the filesystem is the point
 
@@ -221,82 +324,94 @@ to the project is enough — there is no mapping file to maintain.
 
 - strips `data-node-id` before writing (Figma scaffolding, meaningless in code)
 - updates the `index.ts` barrel export so the component is actually importable
-- `remember_mapping` stores a user-confirmed mapping into a private asset
+- `remember_mapping` stores a user-confirmed mapping into a private asset    
   library, so a known component resolves without re-derivation
 
-`check_mapping_health` detects when a previously mapped component file has been
-deleted or moved, so the library degrades visibly instead of silently producing
+`check_mapping_health` detects when a previously mapped component file has been  
+deleted or moved, so the library degrades visibly instead of silently producing  
 dead references.
 
 ### Long-lived process, bounded memory
 
-Compilation is CPU- and network-bound with low per-request cost, so a
-per-invocation process would pay Node startup on every tool call. A daemon
-holds the cache and is reached over a socket; `daemon-client.js` handles
+Compilation is CPU- and network-bound with low per-request cost, so a  
+per-invocation process would pay Node startup on every tool call. A daemon  
+holds the cache and is reached over a socket; `daemon-client.js` handles  
 reconnection so a dead daemon degrades to a cold compile instead of an error.
 
 ### Entitlement without a network call
 
-License validation is offline Ed25519 signature checking (`license.js`) against
-`keys/public.pem`. The private key is never committed or published.
-`refresh_crl` pulls a revocation list so a revoked token stops working without
+License validation is offline Ed25519 signature checking (`license.js`) against  
+`keys/public.pem`. The private key is never committed or published.  
+`refresh_crl` pulls a revocation list so a revoked token stops working without  
 shipping new code.
 
-> **Disclosure:** the license issuing tools (`tools/keygen.js`,
-> `tools/issue-license.js`, `tools/batch-issue.js`) and `tools/quota-server.js`
-> are in this repository and in the published npm tarball. They are the
-> operational side of a self-serve product, not secrets — the signing key is not
-> here. If that trade-off stops being right, the fix is to move entitlement
+> **Disclosure:** the license issuing tools (`tools/keygen.js`,>   
+> `tools/issue-license.js`, `tools/batch-issue.js`) and `tools/quota-server.js`>   
+> are in this repository and in the published npm tarball. They are the>   
+> operational side of a self-serve product, not secrets — the signing key is not>   
+> here. If that trade-off stops being right, the fix is to move entitlement>   
 > server-side, not to hide these files.
 
 ### Verification status
 
-`npm test` runs `test/smoke.mjs` on every push (`.github/workflows/test.yml`).
-It is a smoke suite, not a full test pyramid: it exercises tool routing, tier
-selection, and the write path end-to-end. Coverage of the LLM assembly path is
-inherently bounded — it needs live Figma files and a provider key, so CI does
+`npm test` runs `test/smoke.mjs` on every push (`.github/workflows/test.yml`).  
+It is a smoke suite, not a full test pyramid: it exercises tool routing, tier  
+selection, and the write path end-to-end. Coverage of the LLM assembly path is  
+inherently bounded — it needs live Figma files and a provider key, so CI does  
 not exercise it. Treat the free-tier compile path as the tested surface.
+
+The Astryx contract has its own suite (62 assertions across three files):
+
+| Test                      | Covers                                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `test/astryx-adapter.mjs` | Union-type parsing and the props → variants projection, including malformed and non-literal input     |
+| `test/astryx-e2e.mjs`     | The full parse path against a real CLI capture, including that an out-of-contract variant is rejected |
+| `test/astryx-mapping.mjs` | `scanLocalComponents` integration, determinism, and that a project without Astryx is unaffected       |
+
+`test/astryx-contract-fixtures.mjs` is a captured Astryx CLI response (166  
+components) rather than a hand-written mock, so the tests fail if the upstream  
+contract shape changes. Regenerate it when bumping the Astryx version.
 
 ## FAQ
 
-**Q: Does it work without Figma API access?**
+**Q: Does it work without Figma API access?**  
 A: Yes — you can pass `figmaNode` JSON directly to `compile_figma_component`. But `fetch_figma_node` needs `FIGMA_ACCESS_TOKEN`.
 
-**Q: How do I get a license?**
+**Q: How do I get a license?**  
 A: Purchase from the payment link → receive your license token → paste in MCP config. License is validated offline (Ed25519, zero network calls).
 
-**Q: Can I share my license across devices?**
+**Q: Can I share my license across devices?**  
 A: Yes, up to 2 device fingerprints. Contact support for more.
 
-**Q: Does it work with Kiro + Figma Power?**
+**Q: Does it work with Kiro + Figma Power?**  
 A: Yes — smart-figma-mcp complements Kiro's built-in Figma Power. Figma Power reads designs; smart-figma-mcp deterministically writes code to your project. Use both side-by-side.
 
-**Q: Does BYOK mode still consume credits?**
+**Q: Does BYOK mode still consume credits?**  
 A: No — when using your own API key, credits are not deducted. Only the quotas service (if enabled) records usage counts.
 
-**Q: My Figma file has no Auto Layout — will it work?**
+**Q: My Figma file has no Auto Layout — will it work?**  
 A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We strongly recommend using our Auto Layoutify Figma plugin for best results.
 
 ## Platform Support
 
-| IDE / Tool | Support |
-|---|---|
-| Cursor | ✅ Full |
-| Kiro | ✅ Full |
-| Claude Code | ✅ Full |
-| Windsurf | ✅ Full |
-| VS Code (MCP extension) | ✅ |
-| Continue.dev | ⚠️ Limited |
-| Cline | ⚠️ Limited |
+| IDE / Tool              | Support    |
+| ----------------------- | ---------- |
+| Cursor                  | ✅ Full     |
+| Kiro                    | ✅ Full     |
+| Claude Code             | ✅ Full     |
+| Windsurf                | ✅ Full     |
+| VS Code (MCP extension) | ✅          |
+| Continue.dev            | ⚠️ Limited |
+| Cline                   | ⚠️ Limited |
 
 ## Pricing
 
-| Tier | Price | Quota | BYOK | Visual Compilation |
-|---|---|---|---|---|
-| **Hacker** | Free | 10/day | ❌ | ❌ |
-| **Maker** | $9/mo | 300/mo | ✅ | ✅ |
-| **Pro** | $29/mo | 1,500/mo | ✅ | ✅ |
-| **Early Bird Lifetime** | $19 once | Maker plan | ✅ | ✅ |
+| Tier                    | Price    | Quota      | BYOK | Visual Compilation |
+| ----------------------- | -------- | ---------- | ---- | ------------------ |
+| **Hacker**              | Free     | 10/day     | ❌    | ❌                  |
+| **Maker**               | $9/mo    | 300/mo     | ✅    | ✅                  |
+| **Pro**                 | $29/mo   | 1,500/mo   | ✅    | ✅                  |
+| **Early Bird Lifetime** | $19 once | Maker plan | ✅    | ✅                  |
 
 [Buy License →](https://www.npmjs.com/package/smart-figma-mcp#pricing)
 
@@ -304,14 +419,14 @@ A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We st
 
 ## License
 
-**Source available, not open source.** The code is published so it can be read,
-studied, and evaluated — but you may not redistribute it, build a competing
-product from it, or use it under an open source license. See
-[LICENSE](./LICENSE) for the granted rights and restrictions. Commercial
-licensing is available separately via the
+**Source available, not open source.** The code is published so it can be read,  
+studied, and evaluated — but you may not redistribute it, build a competing  
+product from it, or use it under an open source license. See  
+[LICENSE](./LICENSE) for the granted rights and restrictions. Commercial  
+licensing is available separately via the  
 [purchase page](https://www.npmjs.com/package/smart-figma-mcp#pricing).
 
-Questions about the license: https://github.com/drake-yuan/smart-figma-mcp/issues
+Questions about the license: <https://github.com/drake-yuan/smart-figma-mcp/issues>
 
 ---
 

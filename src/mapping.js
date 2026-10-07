@@ -9,9 +9,13 @@
 //
 // v2 additions: CVA parser, component-library auto-scan, conflict resolution,
 //               alias expansion, mapping health check, export/import.
+// v3 addition: Astryx support — its component API ships as machine-readable
+//               CLI JSON rather than an in-source cva() call, so it is resolved
+//               through astryx-contract.js instead of the CVA regex path.
 
 import fs from "node:fs";
 import path from "node:path";
+import { listComponents as listAstryxComponents, getComponentProps as getAstryxProps, probeAstryx } from "./astryx-contract.js";
 
 // ━━━ Semantic alias table (Figma naming conventions -> code variant conventions) ━━━
 const DEFAULT_ALIAS = {
@@ -88,6 +92,8 @@ const KNOWN_LIBS = {
   "radix-ui": { glob: "src/components/ui/**/*.tsx", cva: false },
   "antd": { glob: "src/components/**/*.tsx", cva: false },
   "@mui/material": { glob: "src/components/**/*.tsx", cva: false },
+  // Astryx is resolved from its CLI contract, not from local source files.
+  "@astryxdesign/core": { glob: null, cva: false, contract: "astryx" },
 };
 
 /** Detect component dependencies declared in the project. */
@@ -133,7 +139,18 @@ export function scanLocalComponents(projectRoot) {
   const libs = detectComponentLib(projectRoot);
   if (libs.length === 0) return [];
 
-  const components = [];
+  // Astryx components live in node_modules and are described by the CLI
+  // contract, so they are enumerated separately from the source-scan path.
+  const astryx = libs.includes("@astryxdesign/core")
+    ? scanAstryxComponents(projectRoot)
+    : [];
+
+  // When only Astryx is installed there are no local .tsx files to scan.
+  if (libs.length === 1 && libs[0] === "@astryxdesign/core") {
+    return astryx;
+  }
+
+  const components = [...astryx];
   const scanDirs = ["src/components/ui", "src/components", "components/ui", "components"];
 
   for (const dir of scanDirs) {
@@ -167,6 +184,74 @@ export function scanLocalComponents(projectRoot) {
   }
 
   return components;
+}
+
+/**
+ * Enumerate Astryx components via the CLI contract.
+ *
+ * Returns [] on any failure: a missing/broken Astryx install must degrade to
+ * "no Astryx components" rather than break scanning for the other libraries.
+ * `variants` is left empty here and filled on demand by mapAstryxComponent(),
+ * because fetching props for 166 components up front would be wasteful.
+ */
+function scanAstryxComponents(projectRoot) {
+  const probe = probeAstryx(projectRoot);
+  if (!probe.usable) return [];
+
+  const listed = listAstryxComponents(projectRoot);
+  if (!listed.ok || !Array.isArray(listed.components)) return [];
+
+  return listed.components.map((c) => ({
+    name: c.name,
+    importPath: c.importPath,
+    file: null,
+    variants: {},
+    hasCVA: false,
+    libs: ["@astryxdesign/core"],
+    category: c.category,
+    source: "astryx",
+  }));
+}
+
+/**
+ * Resolve one scanned Astryx component to its authoritative props.
+ *
+ * This is the step that makes Astryx mapping deterministic: the allowed
+ * variant values come from the shipped contract, not from guessing. Returns
+ * the component descriptor with `variants` populated, or null when the
+ * component or its props cannot be resolved.
+ */
+export function mapAstryxComponent(projectRoot, component) {
+  if (!component) return null;
+  const name = typeof component === "string" ? component : component.name;
+  if (!name) return null;
+
+  const probe = probeAstryx(projectRoot);
+  if (!probe.usable) return null;
+
+  const listed = listAstryxComponents(projectRoot);
+  if (!listed.ok) return null;
+  const meta = listed.components.find((c) => c.name === name);
+  if (!meta) return null;
+
+  const props = getAstryxProps(projectRoot, [name]);
+  if (!props.ok) return null;
+  const propEntry = props.props[name];
+  if (!propEntry) return null;
+
+  // Project union-typed props into the variant dimensions mapToVariant() uses.
+  const variants = {};
+  for (const [propName, spec] of Object.entries(propEntry)) {
+    if (spec?.values?.length) variants[propName] = spec.values;
+  }
+
+  return {
+    ...meta,
+    variants,
+    requiredProps: Object.entries(propEntry)
+      .filter(([, s]) => s.required)
+      .map(([n]) => n),
+  };
 }
 
 // ━━━ Conflict resolution ━━━

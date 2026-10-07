@@ -1,7 +1,7 @@
 {
   "name": "smart-figma-mcp",
-  "version": "1.0.2",
-  "description": "Smart Figma-to-Code MCP Server — map Figma designs to your local shadcn/ui components, generate code, and write files. BYOK + Variant-level mapping + deterministic write.",
+  "version": "1.1.0",
+  "description": "Smart Figma-to-Code MCP Server — map Figma designs to your local component library (shadcn/ui, antd, mui, Astryx), generate code, and write files. BYOK + Variant-level mapping + deterministic write.",
   "type": "module",
   "bin": {
     "smart-figma-mcp": "./bin/cli.js"
@@ -26,6 +26,8 @@
     "codegen",
     "tailwind",
     "shadcn-ui",
+    "astryx",
+    "design-system",
     "cursor",
     "claude-code",
     "design-to-code",

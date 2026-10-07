@@ -28,7 +28,8 @@ import {
   detectResponsiveBreakpoints,
 } from "./compiler.js";
 import { debit, CREDIT_COST, quotaStatus, freeTierDebit, FREE_TIER_DAILY_LIMIT } from "./quota.js";
-import { mapToVariant, rememberMapping, lookupMapping, scanLocalComponents, checkMappingHealth, exportMappings, importMappings, loadAliases, resolveMapping } from "./mapping.js";
+import { mapToVariant, rememberMapping, lookupMapping, scanLocalComponents, checkMappingHealth, exportMappings, importMappings, loadAliases, resolveMapping, mapAstryxComponent } from "./mapping.js";
+import { probeAstryx, getManifest as getAstryxManifest, listComponents as listAstryxComponents, getComponentProps as getAstryxProps, toLocalComponent, ASTRYX_ERRORS } from "./astryx-contract.js";
 import { getNode as figmaGetNode, getFile as figmaGetFile } from "./figma-client.js";
 import { normalizeNode, normalizeFileMeta } from "./figma-normalizer.js";
 import { fileURLToPath } from "node:url";
@@ -395,6 +396,105 @@ function toolScanComponents(args) {
   }
 }
 
+// ─── Astryx contract tools ───
+
+function toolProbeAstryx(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
+  const { projectRoot } = args;
+  if (!projectRoot) return errContent("Missing projectRoot argument.");
+  const probe = probeAstryx(projectRoot);
+  return okContent(JSON.stringify({
+    ...probe,
+    // Turn the internal tag into an actionable instruction.
+    hint: probe.usable
+      ? "Astryx contract available; call fetch_astryx_contract for component props."
+      : probe.reason === ASTRYX_ERRORS.CLI_NOT_INSTALLED
+        ? "Install it with: npm install -D @astryxdesign/cli"
+        : probe.reason === ASTRYX_ERRORS.CORE_NOT_INSTALLED
+          ? "Install it with: npm install @astryxdesign/core @stylexjs/stylex"
+          : "Astryx present but the CLI did not return a usable contract.",
+  }, null, 2));
+}
+
+function toolFetchAstryxContract(args) {
+  const { lic } = gate();
+  if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
+
+  const { projectRoot, components: names, includeManifest = false, refresh = false } = args;
+  if (!projectRoot) return errContent("Missing projectRoot argument.");
+
+  const probe = probeAstryx(projectRoot);
+  if (!probe.usable) {
+    const hint = probe.reason === ASTRYX_ERRORS.CLI_NOT_INSTALLED
+      ? "npm install -D @astryxdesign/cli"
+      : "npm install @astryxdesign/core @stylexjs/stylex";
+    return errContent(`Astryx contract unavailable (${probe.reason}). Fix with: ${hint}`);
+  }
+
+  try {
+    const listed = listAstryxComponents(projectRoot, { refresh });
+    if (!listed.ok) {
+      return errContent(`Astryx component list failed (${listed.code}): ${listed.error}`);
+    }
+
+    // With no explicit selection, return the category index only — fetching
+    // props for all 166 components would be wasteful and slow.
+    if (!Array.isArray(names) || names.length === 0) {
+      return okContent(JSON.stringify({
+        cliVersion: listed.version,
+        count: listed.components.length,
+        categories: listed.categories,
+        components: listed.components.map((c) => ({ name: c.name, category: c.category, importPath: c.importPath })),
+        hint: "Pass `components` (max 100 per call) to retrieve authoritative props.",
+      }, null, 2));
+    }
+
+    const wanted = names.slice(0, 100);
+    const props = getAstryxProps(projectRoot, wanted, { refresh });
+    if (!props.ok) {
+      return errContent(`Astryx props fetch failed (${props.code}): ${props.error}`);
+    }
+
+    // Project each component into the same descriptor shape the shadcn path
+    // produces, so downstream mapping code is library-agnostic.
+    const resolved = wanted.map((name) => {
+      const meta = listed.components.find((c) => c.name === name);
+      const propEntry = props.props[name];
+      if (!meta || !propEntry) {
+        return { name, resolved: false, reason: props.unresolved.includes(name) ? "unresolved" : "not_in_contract" };
+      }
+      return { name, resolved: true, ...toLocalComponent(meta, propEntry) };
+    });
+
+    const payload = {
+      cliVersion: listed.version,
+      requested: wanted.length,
+      resolved: resolved.filter((r) => r.resolved).length,
+      unresolved: props.unresolved,
+      components: resolved,
+    };
+
+    if (includeManifest) {
+      const manifest = getAstryxManifest(projectRoot, { refresh });
+      if (manifest.ok) {
+        payload.manifest = {
+          name: manifest.data.name,
+          version: manifest.data.version,
+          apiVersion: manifest.data.apiVersion,
+          commands: (manifest.data.commands || []).map((c) => ({ name: c.name, description: c.description })),
+        };
+      } else {
+        payload.manifestError = { code: manifest.code, error: manifest.error };
+      }
+    }
+
+    return okContent(JSON.stringify(payload, null, 2));
+  } catch (e) {
+    return errContent(`Astryx contract fetch failed: ${e.message}`);
+  }
+}
+
 function toolMappingHealth(args) {
   const { lic } = gate();
   if (!lic.ok) return errContent(`License verification failed: ${lic.reason}`);
@@ -550,6 +650,29 @@ const TOOLS = [
     },
   },
   {
+    name: "probe_astryx",
+    description: "Check whether the Astryx design-system contract is available in a project (CLI + core installed, version). Use this before fetch_astryx_contract. Degrades gracefully when Astryx is absent.",
+    inputSchema: {
+      type: "object",
+      properties: { projectRoot: { type: "string", description: "Absolute path to the project root" } },
+      required: ["projectRoot"],
+    },
+  },
+  {
+    name: "fetch_astryx_contract",
+    description: "Fetch the authoritative Astryx component contract as JSON: component index (categories + import paths) or, when `components` is given, the exact props table per component (types, required flags, enum values). Use the enum values to avoid inventing props — this is the machine-readable source of truth, so generated code contains no hallucinated variants. Max 100 components per call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectRoot: { type: "string", description: "Absolute path to the project root" },
+        components: { type: "array", items: { type: "string" }, description: "Component names to resolve (e.g. [\"Button\",\"Badge\"]). Omit to get the full component index instead." },
+        includeManifest: { type: "boolean", description: "Also include the CLI manifest (commands + global options)" },
+        refresh: { type: "boolean", description: "Bypass the on-disk contract cache" },
+      },
+      required: ["projectRoot"],
+    },
+  },
+  {
     name: "check_mapping_health",
     description: "Check whether component files referenced by the mapping asset library still exist, and flag stale entries.",
     inputSchema: {
@@ -605,6 +728,10 @@ async function dispatchTool(name, args) {
       return toolCacheClear();
     case "scan_components":
       return toolScanComponents(args || {});
+    case "probe_astryx":
+      return toolProbeAstryx(args || {});
+    case "fetch_astryx_contract":
+      return toolFetchAstryxContract(args || {});
     case "check_mapping_health":
       return toolMappingHealth(args || {});
     case "export_mappings":
