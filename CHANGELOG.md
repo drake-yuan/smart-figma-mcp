@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.2.0] — 2026-10-07
+### antd / @mui/material contract support (typed-declaration engine)
+- `src/mui-antd-contract.js` (new): reads each library's shipped `.d.ts` and
+  extracts literal-union props from `<Component>Props`. Resolves named type
+  aliases (e.g. antd `type ButtonType = 'primary' | ...`) and peels mui's
+  `OverridableStringUnion<T>` wrapper, which otherwise decays to `string` and
+  loses the literals. Non-literal props (callbacks, objects, opaque refs) are
+  skipped rather than guessed.
+- `src/mapping.js`: antd / @mui/material now resolve through this third contract
+  path inside `scanLocalComponents()`, so they yield real variant allow-lists
+  instead of empty `{}`. `mapToVariant()` now matches exact library values
+  first and only falls back to the alias table when there is no exact hit — this
+  stops the shadcn-oriented alias table (`primary -> default`) from rewriting
+  antd/mui's own real `primary` value.
+- `test/mui-antd-contract.mjs` (new, 21 assertions): extraction for antd/mui,
+  alias + `OverridableStringUnion` handling, and that an out-of-contract value
+  is dropped (no hallucination).
+- `README.md`: contract-engine table and "three contract engines" section now
+  cover the typed-dts path; antd/mui "authoritative contract" claim is now true.
+
 ## [1.1.1] — 2026-10-07
 ### Documentation
 - `README.md`: added OpenAI Codex to the platform support matrix and a

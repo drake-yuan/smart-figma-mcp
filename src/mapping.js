@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listComponents as listAstryxComponents, getComponentProps as getAstryxProps, probeAstryx } from "./astryx-contract.js";
+import { scanTypedLibComponents, isTypedLib } from "./mui-antd-contract.js";
 
 // ━━━ Semantic alias table (Figma naming conventions -> code variant conventions) ━━━
 const DEFAULT_ALIAS = {
@@ -90,8 +91,10 @@ export function parseCVA(source) {
 const KNOWN_LIBS = {
   "shadcn/ui": { glob: "src/components/ui/**/*.tsx", cva: true },
   "radix-ui": { glob: "src/components/ui/**/*.tsx", cva: false },
-  "antd": { glob: "src/components/**/*.tsx", cva: false },
-  "@mui/material": { glob: "src/components/**/*.tsx", cva: false },
+  // antd / mui do not use cva and live in node_modules, so their contracts are
+  // resolved from their shipped .d.ts via mui-antd-contract.js (not from here).
+  "antd": { glob: "src/components/**/*.tsx", cva: false, contract: "typed-dts" },
+  "@mui/material": { glob: "src/components/**/*.tsx", cva: false, contract: "typed-dts" },
   // Astryx is resolved from its CLI contract, not from local source files.
   "@astryxdesign/core": { glob: null, cva: false, contract: "astryx" },
 };
@@ -181,6 +184,16 @@ export function scanLocalComponents(projectRoot) {
         libs: libs,
       });
     }
+  }
+
+  // antd / @mui/material ship their variant contract as .d.ts in node_modules,
+  // not as cva() calls in the user's source — so they need a third resolution
+  // path (mui-antd-contract.js) to yield real allow-lists instead of {}.
+  for (const lib of libs) {
+    if (!isTypedLib(lib)) continue;
+    try {
+      components.push(...scanTypedLibComponents(projectRoot, lib));
+    } catch {}
   }
 
   return components;
@@ -306,14 +319,33 @@ export function mapToVariant(figmaProps, localComponent) {
   const variants = localComponent.variants || {};
   for (const [figKey, figVal] of Object.entries(figmaProps || {})) {
     total++;
-    const normVal = normalize(figVal);
-    // Find a local variant dimension whose value set contains the normalized value.
+    const raw = String(figVal).trim().toLowerCase();
+    let chosen = null;
+
+    // 1) Exact, case-insensitive membership wins first. This keeps a library's
+    //    own real values intact (e.g. antd/mui's literal `primary`) instead of
+    //    letting the shadcn-oriented alias table rewrite them.
     for (const [vKey, allowed] of Object.entries(variants)) {
-      if (allowed.map(normalize).includes(normVal)) {
-        props[vKey] = allowed.find((a) => normalize(a) === normVal);
-        matched++;
-        break;
+      const hit = allowed.find((a) => String(a).trim().toLowerCase() === raw);
+      if (hit) { chosen = { vKey, value: hit }; break; }
+    }
+
+    // 2) Alias fallback only when there is no exact match — translates designer
+    //    labels (Danger -> destructive, Small -> sm) without corrupting real
+    //    library values that happen to collide with an alias key.
+    if (!chosen) {
+      const aliased = ALIAS[raw];
+      if (aliased && aliased !== raw) {
+        for (const [vKey, allowed] of Object.entries(variants)) {
+          const hit = allowed.find((a) => String(a).trim().toLowerCase() === aliased);
+          if (hit) { chosen = { vKey, value: hit }; break; }
+        }
       }
+    }
+
+    if (chosen) {
+      props[chosen.vKey] = chosen.value;
+      matched++;
     }
   }
 
