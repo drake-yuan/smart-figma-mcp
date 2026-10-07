@@ -74,13 +74,19 @@ if (process.argv[1] && (process.argv[1].endsWith("issue-license.js") || process.
   const days = parseInt(arg("days", "30"), 10);
   const devicesRaw = arg("devices", "");
   const quotaMonthly = parseInt(arg("quota-monthly", ""), 10) || null;
+  const quiet = process.argv.includes("--quiet");
 
   try {
     const result = issueLicense({ sub, plan, days, devicesRaw, quotaMonthly });
-    console.log("✅ License issued:\n");
-    console.log(result.token);
-    console.log("\nPayload:", JSON.stringify(result.payload, null, 2));
-    console.log(`\n📝 Issuance logged to keys/issue-log.jsonl (jti: ${result.jti})`);
+    if (quiet) {
+      // Machine-parseable output: bare token only, for CI capture.
+      console.log(result.token);
+    } else {
+      console.log("✅ License issued:\n");
+      console.log(result.token);
+      console.log("\nPayload:", JSON.stringify(result.payload, null, 2));
+      console.log(`\n📝 Issuance logged to keys/issue-log.jsonl (jti: ${result.jti})`);
+    }
   } catch (e) {
     console.error(e.message);
     process.exit(1);

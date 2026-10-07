@@ -10,7 +10,7 @@ jobs:
           node-version: 20
       - run: npm run keygen
       - run: |
-          TOKEN=$(node tools/issue-license.js --sub ci --plan maker --days 1 --quota-monthly 10 2>/dev/null | head -2 | tail -1)
+          TOKEN=$(node tools/issue-license.js --sub ci --plan maker --days 1 --quota-monthly 10 --quiet)
           SMART_FIGMA_LICENSE="$TOKEN" node test/smoke.mjs
 
   # Astryx contract tests. These need no license, no Figma access, and no

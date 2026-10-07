@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
 const TMP = path.join(__dirname, "..", "test", "__temp__");
 const serverPath = path.join(__dirname, "..", "src", "server.js");
 
@@ -113,7 +114,7 @@ const LOCAL_BUTTON = {
   section("1) Initialize protocol");
   const init = await call("initialize", {});
   assert(init.result?.serverInfo?.name === "smart-figma-mcp", "initialize returns serverInfo");
-  assert(init.result?.serverInfo?.version === "1.0.0", "version read from package.json (1.0.0)");
+  assert(init.result?.serverInfo?.version === PKG_VERSION, `version read from package.json (${PKG_VERSION})`);
   assert(init.result?.protocolVersion === "2024-11-05", "protocolVersion is correct");
 
   // ━━━ tools/list ━━━
