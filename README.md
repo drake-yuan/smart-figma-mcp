@@ -4,9 +4,11 @@
 >
 > BYOK · Variant-level mapping · Deterministic write · Zero external dependencies
 
-![npm version](https://img.shields.io/npm/v/smart-figma-mcp.svg)
+<div align="center">
 
-![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)
+![npm version](https://img.shields.io/npm/v/smart-figma-mcp.svg) ![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)
+
+</div>
 
 ## Why smart-figma-mcp?
 
