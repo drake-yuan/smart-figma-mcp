@@ -20,7 +20,7 @@ When you paste a Figma link into Cursor / Claude Code / Codex, AI doesn't know y
 | Write to your codebase           | ❌                      | ✅ Deterministic write                               |
 | Variant mapping (zero config)    | ❌ (needs Code Connect) | ✅ shadcn/ui + cva auto-align                        |
 | Authoritative component contract | ❌                      | ✅ shadcn/ui, antd, mui, **Astryx (166 components)** |
-| Token cost attribution           | Unclear                | ✅ BYOK — on YOUR bill                               |
+| Token cost attribution           | Unclear                | ✅ BYOK — key-validated, no server token spend       |
 | data-node-id cleanup             | ❌                      | ✅ Stripped on save                                  |
 
 **We don't compete on "read and suggest". We win on "write and land".**
@@ -211,7 +211,7 @@ export FIGMA_ACCESS_TOKEN="<your-figma-personal-access-token>"
 
 - **$9/month** or **$19 lifetime** (early bird)
 - Plug your own API key (OpenAI / Anthropic / DeepSeek / Zhipu)
-- Tokens go on YOUR bill — zero cost on our side
+- Usage is attributed to your key; the server makes no LLM calls (code generation runs on your host LLM — already your subscription)
 - Semantic + Visual compilation paths enabled
 - All tools unlocked
 
@@ -527,7 +527,7 @@ A: Yes — smart-figma-mcp complements Kiro's built-in Figma Power. Figma Power 
 
 **Q: Does BYOK mode still consume credits?**
 
-A: No — when using your own API key, credits are not deducted. Only the quotas service (if enabled) records usage counts.
+A: No — when using your own API key, credits are not deducted. Only the quotas service (if enabled) records usage counts. Note: the server does not call an LLM under BYOK either — code generation runs on your host LLM (Cursor / Claude Code / Codex), which is already covered by your own subscription.
 
 **Q: My Figma file has no Auto Layout — will it work?**
 
