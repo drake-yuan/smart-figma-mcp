@@ -10,7 +10,7 @@
 
 ## Why smart-figma-mcp?
 
-When you paste a Figma link into Cursor / Claude Code, AI doesn't know your project components. It generates raw `<div>` soup every time — wrong styles, no variants, garbage `data-node-id` attributes. Ask for a `<Button variant="ghost-primary">` and you'll get a prop that doesn't exist.
+When you paste a Figma link into Cursor / Claude Code / Codex, AI doesn't know your project components. It generates raw `<div>` soup every time — wrong styles, no variants, garbage `data-node-id` attributes. Ask for a `<Button variant="ghost-primary">` and you'll get a prop that doesn't exist.
 
 **smart-figma-mcp** bridges this gap:
 
@@ -110,6 +110,49 @@ smart-figma-mcp uses MCP (Model Context Protocol). Add this to your IDE's MCP co
 }
 ```
 
+**Codex CLI / IDE extension** — config is TOML, not JSON. Add a
+`[mcp_servers.smart-figma]` table to `~/.codex/config.toml` (or
+`.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.smart-figma]
+command = "npx"
+args = ["smart-figma-mcp"]
+startup_timeout_sec = 30
+# "writes" prompts before any tool that mutates the filesystem, which is what
+# you want for save_component; "auto" trusts the server without prompting.
+default_tools_approval_mode = "writes"
+```
+
+Codex spawns the command directly rather than through a shell, so `command`
+takes the bare program name and everything else belongs in `args` — putting a
+whole command line in `command` is the most common setup error. Secrets are
+best passed by reference so they never land in the file:
+
+```toml
+[mcp_servers.smart-figma]
+command = "npx"
+args = ["smart-figma-mcp"]
+env_vars = ["SMART_FIGMA_LICENSE", "FIGMA_ACCESS_TOKEN", "LLM_API_KEY"]
+```
+
+Or let the CLI write the block for you:
+
+```bash
+codex mcp add smart-figma --env SMART_FIGMA_LICENSE=<token> -- npx smart-figma-mcp
+codex mcp list      # verify it registered
+```
+
+Two Codex-specific notes:
+
+- **Startup timeout.** A cold `npx` downloads the package on first run, which
+  can exceed the 10s default and surface as a handshake failure. The
+  `startup_timeout_sec = 30` above avoids it.
+- **IDE extension.** Servers registered via `config.toml` work in the CLI; the
+  VS Code extension has a known issue where it does not always pick them up
+  ([openai/codex#6465](https://github.com/openai/codex/issues/6465)). If tools
+  are missing in the extension but `/mcp` lists them in the TUI, this is why.
+
 **Claude Code** — use shell env variables instead of inline env:
 
 ```json
@@ -195,8 +238,8 @@ Non-standard layouts don't fail — they return `SUGGEST_AUTOLAYOUT`, guiding yo
 ┌─────────────┐  JSON-RPC   ┌──────────────────────┐
 │  Cursor /   │  over stdio  │  smart-figma-mcp     │
 │  Claude Code│◄────────────►│                      │
-└─────────────┘              │  ┌────────────────┐  │
-                             │  │ Offline         │  │
+│  Codex      │              │  ┌────────────────┐  │
+└─────────────┘              │  │ Offline         │  │
                              │  │ Ed25519 License │  │
                              │  │ (zero network)  │  │
                              │  └────────────────┘  │
@@ -392,6 +435,18 @@ A: No — when using your own API key, credits are not deducted. Only the quotas
 **Q: My Figma file has no Auto Layout — will it work?**  
 A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We strongly recommend using our Auto Layoutify Figma plugin for best results.
 
+**Q: Does it work with Codex?**
+A: Yes, via `~/.codex/config.toml` — see [IDE Setup](#ide-setup) for the full block. Two things trip people up: Codex does not run the command through a shell, so `command = "npx smart-figma-mcp"` fails and arguments belong in the `args` array; and a cold `npx` can exceed the default 10s startup timeout, so set `startup_timeout_sec = 30`.
+
+**Q: The tools appear in the Codex CLI but not in its VS Code extension.**
+A: Known Codex issue ([openai/codex#6465](https://github.com/openai/codex/issues/6465)) — the extension does not always pick up servers that `config.toml` defines and the CLI loads. Use the CLI, or register the server through the extension's own MCP settings panel.
+
+**Q: Does it work with Astryx?**
+A: Yes. Install `@astryxdesign/core` and `@astryxdesign/cli`, then call `probe_astryx` to confirm. Astryx is resolved from its CLI contract rather than source scraping, so variant values are the authoritative ones. Because Astryx is Beta, the contract is version-stamped and cached — if a CLI upgrade lands, the cache invalidates itself.
+
+**Q: I use both shadcn/ui and Astryx. Which wins?**
+A: Both are scanned. Astryx components come from the CLI contract and are tagged `source: "astryx"`; the rest come from your `.tsx` sources. Per-component mapping uses whichever library actually declares that component.
+
 ## Platform Support
 
 | IDE / Tool              | Support    |
@@ -399,10 +454,24 @@ A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We st
 | Cursor                  | ✅ Full     |
 | Kiro                    | ✅ Full     |
 | Claude Code             | ✅ Full     |
+| Codex CLI               | ✅ Full     |
+| Codex IDE extension     | ⚠️ See note |
 | Windsurf                | ✅ Full     |
 | VS Code (MCP extension) | ✅          |
 | Continue.dev            | ⚠️ Limited |
 | Cline                   | ⚠️ Limited |
+
+Codex is supported via `config.toml` (TOML, not JSON) — see
+[IDE Setup](#ide-setup) for the exact block and two gotchas that produce
+confusing failures: a cold `npx` exceeding the 10s startup timeout, and the IDE
+extension not picking up servers that the CLI loads fine
+([openai/codex#6465](https://github.com/openai/codex/issues/6465)). The CLI is
+the reliable path today.
+
+`Continue.dev` and `Cline` are Limited because their MCP clients implement the
+base protocol but have historically been inconsistent about long-running stdio
+servers and tool-result streaming. The limitation is in their clients, not in
+this server — if it works for you, it is worth reporting upstream.
 
 ## Pricing
 

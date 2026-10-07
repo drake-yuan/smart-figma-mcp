@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.1] — 2026-10-07
+### Documentation
+- `README.md`: added OpenAI Codex to the platform support matrix and a
+  dedicated `config.toml` setup block. Codex differs from the JSON clients in
+  ways worth writing down: config is TOML, the command is spawned without a
+  shell (so arguments must go in `args`, not `command`), a cold `npx` can
+  exceed the default 10s startup timeout, and `default_tools_approval_mode`
+  is the right place to gate `save_component`. Notes the open extension-side
+  issue (openai/codex#6465) and separates CLI support from IDE-extension
+  support rather than claiming both.
+- Clarified the Continue.dev / Cline "Limited" rating: the limitation is in
+  their MCP clients, not in this server.
+- `package.json`: `codex` keyword
+
 ## [1.1.0] — 2026-10-07
 ### Astryx design-system contract support
 - `src/astryx-contract.js` (new): adapter over `@astryxdesign/cli`, normalising
