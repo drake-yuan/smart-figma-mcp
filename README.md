@@ -217,24 +217,27 @@ export FIGMA_ACCESS_TOKEN="<your-figma-personal-access-token>"
 
 ### Supported LLM Providers
 
-| Provider    | Env Var             | Base URL                               |
-| ----------- | ------------------- | -------------------------------------- |
-| OpenAI      | `OPENAI_API_KEY`    | `https://api.openai.com/v1`            |
-| Anthropic   | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1`         |
-| DeepSeek    | `DEEPSEEK_API_KEY`  | `https://api.deepseek.com/v1`          |
-| Zhipu (GLM) | `ZHIPU_API_KEY`     | `https://open.bigmodel.cn/api/paas/v4` |
+| Provider    | `LLM_PROVIDER` value | Base URL                                          |
+| ----------- | -------------------- | ------------------------------------------------- |
+| OpenAI      | `openai`             | `https://api.openai.com/v1`                        |
+| Anthropic   | `anthropic`          | `https://api.anthropic.com/v1`                     |
+| DeepSeek    | `deepseek`           | `https://api.deepseek.com/v1`                      |
+| Zhipu (GLM) | `zhipu`              | `https://open.bigmodel.cn/api/paas/v4`             |
+| Gemini      | `gemini`             | `https://generativelanguage.googleapis.com/v1beta` |
 
-Set `LLM_PROVIDER` + `LLM_API_KEY` (or the provider-specific env var) to enable BYOK.
+Set `LLM_PROVIDER` + `LLM_API_KEY` to enable BYOK. The server reads **only** these two variables — provider-specific vars like `OPENAI_API_KEY` are not consumed.
 
 ## Compilation Strategy
 
 The compiler auto-detects node complexity with an additive score and routes accordingly:
 
-| Score   | Level        | Strategy                               | Token Cost |
-| ------- | ------------ | -------------------------------------- | ---------- |
-| `< 35`  | **SIMPLE**   | PURE_DIGITAL — direct math computation | 0          |
-| `35–74` | **MODERATE** | SEMANTIC — coordinate-flow clustering  | ~1 credit  |
-| `≥ 75`  | **COMPLEX**  | VISUAL — multi-modal LLM               | ~5 credits |
+| Score   | Level        | Strategy                               | Server Credit Cost |
+| ------- | ------------ | -------------------------------------- | ------------------ |
+| `< 35`  | **SIMPLE**   | PURE_DIGITAL — direct math computation | 0                  |
+| `35–74` | **MODERATE** | SEMANTIC — coordinate-flow clustering  | ~1 credit          |
+| `≥ 75`  | **COMPLEX**  | VISUAL — multi-modal LLM               | ~5 credits         |
+
+> In BYOK mode the server makes **no** LLM calls, so this column is always **$0** — generation runs on your own host LLM. The costs above apply only to the Credits model.
 
 Score terms: no Auto Layout `+30`, absolute-positioned child `+15` each,
 
