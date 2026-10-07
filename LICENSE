@@ -1,43 +1,54 @@
-Smart Figma MCP — Proprietary License
-Copyright (c) 2026 Smart Figma Team. All rights reserved.
+smart-figma-mcp — Source Available License
+Copyright (c) 2026 Changlong Yuan. All rights reserved.
 
-1. Grant of License
-   Subject to a valid, paid subscription and a corresponding license token
-   issued by the copyright holder, you are granted a non-exclusive,
-   non-transferable, revocable right to install and use this software
-   ("the Software") for your own development purposes.
+NOTICE: This is not an open source license. The source code is published for
+inspection, study, and evaluation only. No rights are granted to redistribute
+derived works, nor to use this software under an open source license.
 
-2. Restrictions
+1. Grant of Use
+   You may install and use the Software subject to the usage limits enforced
+   by the Software itself. A license token may be required for features beyond
+   the free evaluation tier.
+
+2. Source Visibility
+   The source code of this repository is published for inspection, study, and
+   evaluation. You may read it, clone it, and study the architecture and design
+   decisions contained in it.
+
+3. Restrictions
    You may NOT, without prior written permission from the copyright holder:
    (a) redistribute, resell, sublicense, lease, or otherwise make the
        Software available to any third party;
-   (b) publish, mirror, or re-upload the Software or any substantial portion
-       of its source code to any public or private package registry, code
-       host, or distribution channel;
-   (c) modify, adapt, reverse engineer, or create derivative works for the
-       purpose of building a competing product or service;
-   (d) remove or alter any proprietary notices, license checks, or
-       attribution contained in the Software.
+   (b) modify, adapt, or create derivative works for the purpose of building a
+       competing product or service;
+   (c) remove or alter any proprietary notices, license checks, quota
+       enforcement, or attribution contained in the Software.
 
-3. Free Tier
-   The Software may expose a limited free tier that operates without a paid
-   license token. Use of the free tier is permitted solely for evaluation
-   and personal use, subject to the usage limits enforced by the Software,
-   and remains governed by the restrictions in Section 2.
+4. Commercial Licensing
+   Commercial licensing is available separately. For pricing and licensing
+   terms, see:
 
-4. Ownership
-   The Software is licensed, not sold. All intellectual property rights in
-   and to the Software remain with the copyright holder.
+       https://www.npmjs.com/package/smart-figma-mcp#pricing
 
-5. No Warranty
+5. No Open Source Grant
+   This License does not grant any right to use, copy, modify, or distribute the
+   Software or any derivative work under an open source license. The source is
+   made visible, not licensed openly.
+
+6. Ownership
+   The Software is licensed, not sold. All intellectual property rights in and
+   to the Software remain with the copyright holder.
+
+7. No Warranty
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
 
-6. Limitation of Liability
+8. Limitation of Liability
    IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
-   OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
-   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+   OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+   ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
 
-For commercial licensing or redistribution permission, contact the
-copyright holder.
+For commercial licensing or redistribution permission, contact the copyright
+holder.

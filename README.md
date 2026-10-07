@@ -117,13 +117,17 @@ Set `LLM_PROVIDER` + `LLM_API_KEY` (or the provider-specific env var) to enable 
 
 ## Compilation Strategy
 
-The compiler auto-detects node complexity:
+The compiler auto-detects node complexity with an additive score and routes accordingly:
 
-| Complexity | Strategy | Token Cost |
-|---|---|---|
-| **SIMPLE** (Auto Layout ✅, depth ≤ 3) | PURE_DIGITAL — direct math computation | 0 |
-| **MODERATE** (Mixed layout, depth 4–6) | SEMANTIC — coordinate-flow clustering | ~1 credit |
-| **COMPLEX** (Absolute positioning, depth 7+) | VISUAL — multi-modal LLM | ~5 credits |
+| Score | Level | Strategy | Token Cost |
+|---|---|---|---|
+| `< 35` | **SIMPLE** | PURE_DIGITAL — direct math computation | 0 |
+| `35–74` | **MODERATE** | SEMANTIC — coordinate-flow clustering | ~1 credit |
+| `≥ 75` | **COMPLEX** | VISUAL — multi-modal LLM | ~5 credits |
+
+Score terms: no Auto Layout `+30`, absolute-positioned child `+15` each,
+coordinate-flow child `+5` each (capped at 50, `+20` more beyond 10),
+depth beyond 4 `+8` per level.
 
 Non-standard layouts don't fail — they return `SUGGEST_AUTOLAYOUT`, guiding you to fix at the Figma source.
 
@@ -151,6 +155,107 @@ Non-standard layouts don't fail — they return `SUGGEST_AUTOLAYOUT`, guiding yo
                               Figma REST API
                               (fetch_figma_node)
 ```
+
+## Engineering Notes
+
+What follows is the reasoning behind the parts that are not obvious from the
+tool list. If you only want to use it, skip this section.
+
+### 3,700 lines, no runtime dependencies
+
+| Module | Lines | Responsibility |
+|---|---:|---|
+| `server.js` | 763 | MCP surface, tool routing, Figma REST orchestration |
+| `compiler.js` | 525 | Tiered compile strategy, recursive subtree compile |
+| `mapping.js` | 319 | Variant resolution against the local component library |
+| `daemon.js` / `daemon-client.js` | 387 | Long-lived cache process, socket IPC |
+| `figma-client.js` / `figma-normalizer.js` | 311 | REST fetch + node normalization |
+| `license.js` / `quota.js` / `byok.js` | 413 | Entitlement, quota accounting, provider routing |
+| `cache.js` / `figma-screenshot.js` | 309 | Compile cache, screenshot fallback |
+| `tools/*` | 336 | Key generation, license issuing, quota service |
+| `test/smoke.mjs` | 341 | End-to-end smoke coverage |
+
+No runtime `dependencies` field in `package.json` — MCP over stdio plus `fetch`
+and `node:crypto` are all that is required. This keeps install fast and avoids
+the supply-chain surface a dependency tree would add.
+
+### Why a tiered compile strategy
+
+A single strategy wastes money and produces bad output. `compiler.js` scores
+every node and routes it by additive score (the table above). Two details in
+that scoring are deliberate:
+
+**Coordinate-flow children are counted separately from absolute-positioned
+ones.** A child with `x`/`y` but no Auto Layout is a grid the compiler can
+recover; a child tagged `layoutPositioning === "ABSOLUTE"` is an overlay it
+cannot. Treating the two the same is what makes naive implementations fail on
+real design files.
+
+**Depth is a hard limit, not a hint.** `MAX_DEPTH = 6`; `compileRecursive()`
+records a `depthWarning` and skips rather than recursing deeper. Unbounded
+recursion on a pathological Figma tree is a real failure mode, and a skipped
+subtree is visible in the output instead of silently truncating.
+
+**Degrade to advice, not to a guess.** When a node is too complex to compile
+reliably, the compiler returns `SUGGEST_AUTOLAYOUT` and points at the
+`figma_auto_layoutify` plugin — a source-side fix. It does not emit code it
+cannot stand behind. The free tier is `PURE_DIGITAL` only, which means the free
+path is genuinely deterministic rather than quietly degraded.
+
+**Naming reflects what actually ran.** The router reports `PURE_DIGITAL` /
+`SEMANTIC` / `VISUAL`, while the recursive compiler emits `PURE_DIGITAL` /
+`COORDINATE_FLOW` / `LEAF`. The first is a cost decision; the second is the
+executed path. They line up in practice but are not the same vocabulary, and
+`MappingResult.strategy` reflects the executed path.
+
+### Variant mapping without a config file
+
+`mapping.js` resolves a Figma node to a local component by inspecting the
+project's own component library (shadcn/ui, antd, mui). Variants come from
+Figma's own variant properties reconciled through `cva`, so adding a component
+to the project is enough — there is no mapping file to maintain.
+
+### Writing to the filesystem is the point
+
+`save_component` is the only tool that mutates anything. Three guarantees:
+
+- strips `data-node-id` before writing (Figma scaffolding, meaningless in code)
+- updates the `index.ts` barrel export so the component is actually importable
+- `remember_mapping` stores a user-confirmed mapping into a private asset
+  library, so a known component resolves without re-derivation
+
+`check_mapping_health` detects when a previously mapped component file has been
+deleted or moved, so the library degrades visibly instead of silently producing
+dead references.
+
+### Long-lived process, bounded memory
+
+Compilation is CPU- and network-bound with low per-request cost, so a
+per-invocation process would pay Node startup on every tool call. A daemon
+holds the cache and is reached over a socket; `daemon-client.js` handles
+reconnection so a dead daemon degrades to a cold compile instead of an error.
+
+### Entitlement without a network call
+
+License validation is offline Ed25519 signature checking (`license.js`) against
+`keys/public.pem`. The private key is never committed or published.
+`refresh_crl` pulls a revocation list so a revoked token stops working without
+shipping new code.
+
+> **Disclosure:** the license issuing tools (`tools/keygen.js`,
+> `tools/issue-license.js`, `tools/batch-issue.js`) and `tools/quota-server.js`
+> are in this repository and in the published npm tarball. They are the
+> operational side of a self-serve product, not secrets — the signing key is not
+> here. If that trade-off stops being right, the fix is to move entitlement
+> server-side, not to hide these files.
+
+### Verification status
+
+`npm test` runs `test/smoke.mjs` on every push (`.github/workflows/test.yml`).
+It is a smoke suite, not a full test pyramid: it exercises tool routing, tier
+selection, and the write path end-to-end. Coverage of the LLM assembly path is
+inherently bounded — it needs live Figma files and a provider key, so CI does
+not exercise it. Treat the free-tier compile path as the tested surface.
 
 ## FAQ
 
@@ -194,6 +299,19 @@ A: The compiler returns `SUGGEST_AUTOLAYOUT` for complex non-layout nodes. We st
 | **Early Bird Lifetime** | $19 once | Maker plan | ✅ | ✅ |
 
 [Buy License →](https://www.npmjs.com/package/smart-figma-mcp#pricing)
+
+---
+
+## License
+
+**Source available, not open source.** The code is published so it can be read,
+studied, and evaluated — but you may not redistribute it, build a competing
+product from it, or use it under an open source license. See
+[LICENSE](./LICENSE) for the granted rights and restrictions. Commercial
+licensing is available separately via the
+[purchase page](https://www.npmjs.com/package/smart-figma-mcp#pricing).
+
+Questions about the license: https://github.com/drake-yuan/smart-figma-mcp/issues
 
 ---
 

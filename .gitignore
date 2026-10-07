@@ -4,3 +4,11 @@ keys/
 .smart-figma/
 *.log
 .idea/
+
+# macOS resource forks and metadata (would otherwise be committed wholesale)
+._*
+.DS_Store
+Thumbs.db
+
+# build artifacts
+*.tgz

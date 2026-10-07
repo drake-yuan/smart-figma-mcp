@@ -37,13 +37,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://www.npmjs.com/package/smart-figma-mcp"
+    "url": "git+https://github.com/drake-yuan/smart-figma-mcp.git"
   },
-  "homepage": "https://www.npmjs.com/package/smart-figma-mcp",
+  "homepage": "https://github.com/drake-yuan/smart-figma-mcp#readme",
   "bugs": {
-    "url": "https://www.npmjs.com/package/smart-figma-mcp"
+    "url": "https://github.com/drake-yuan/smart-figma-mcp/issues"
   },
-  "author": "Smart Figma Team",
+  "author": {
+    "name": "Changlong Yuan",
+    "url": "https://github.com/drake-yuan"
+  },
   "license": "SEE LICENSE IN LICENSE",
   "private": false
 }
